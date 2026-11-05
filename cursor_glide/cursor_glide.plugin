@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Cursor Glide (NeoVide) for exteraGram
-Port of Ghostty cursor_glide.glsl shader with stretch trail and smooth interpolation.
+Cursor Glide for exteraGram
+Smooth cursor caret animation with dynamic trail stretching.
 """
 
 import colorsys
 import math
 import time
+import traceback
 import types
 import weakref
+
 from typing import Any, Dict, List, Optional, Tuple
 
 from android.graphics import (
@@ -24,7 +26,7 @@ from android.graphics import (
 from android.util import TypedValue
 from android.view import Gravity, View, ViewGroup
 from android.widget import LinearLayout
-from java import dynamic_proxy, jboolean, jclass
+from java import dynamic_proxy, jclass, jint
 from org.telegram.messenger import AndroidUtilities, LocaleController
 from org.telegram.ui.ActionBar import Theme
 from org.telegram.ui.Components import EditTextBoldCursor, EditTextCaption
@@ -32,11 +34,11 @@ from org.telegram.ui.Components import EditTextBoldCursor, EditTextCaption
 from android_utils import run_on_ui_thread
 from base_plugin import BasePlugin, MethodHook
 from hook_utils import find_class
-from ui.settings import Custom, Header, Selector, SimpleSettingFactory, Switch
+from ui.settings import Custom, Header, Input, Selector, SimpleSettingFactory, Switch
 
 __id__ = "cursor_glide"
-__name__ = "Cursor Glide (NeoVide)"
-__description__ = "Плавная скользящая анимация курсора с растяжением шлейфа (порт шейдера Ghostty / NeoVide)"
+__name__ = "Cursor Glide"
+__description__ = "Smooth cursor caret animation with dynamic trail stretching"
 __author__ = "@koresent"
 __version__ = "1.0.1"
 __icon__ = "exteraPlugins/1"
@@ -46,22 +48,49 @@ PREVIEW_TAG = "cursor_glide_preview"
 PREVIEW_START_MS = 250
 PREVIEW_HEIGHT_DP = 64
 
-# Presets from cursor_glide.glsl
-DURATIONS = (0.10, 0.15, 0.20, 0.28)  # seconds (default 0.15s like in Ghostty)
-SMEARS = (0.0, 0.50, 0.85, 1.0)       # trail smear factor (default 0.85 like in Ghostty)
-RADII = (0.0, 1.5, 3.0, 5.0, 12.0)    # corner radius in dp (default 3.0dp like in Ghostty)
+# Animation presets
+DURATIONS = (0.10, 0.15, 0.20, 0.28)  # seconds (default: 0.15s balanced)
+SMEARS = (0.0, 0.50, 0.85, 1.0)       # trail smear factor (default: 0.85 balanced)
+RADII = (0.0, 1.5, 3.0, 5.0, 12.0)    # corner radius in dp (default: 3.0dp rounded)
 
 DEFAULTS = {
     "enabled": True,
-    "speed": 1,           # 0.15s (Ghostty default)
-    "smear": 2,           # 0.85 (Ghostty default)
-    "corner_radius": 2,   # 3.0 dp (Ghostty default)
+    "speed": 1,           # 0.15s (balanced)
+    "smear": 2,           # 0.85 (balanced)
+    "corner_radius": 2,   # 3.0 dp (medium)
     "cursor_shape": 1,    # Normal line
-    "cursor_color": 0,    # Theme cursor
+    "cursor_color": 0,    # Telegram theme
+    "custom_color": "#00E5FF",
     "soft_blink": True,
     "smear_fade": True,
 }
 
+
+def to_int32(val: int) -> int:
+    val = int(val) & 0xFFFFFFFF
+    if val >= 0x80000000:
+        val -= 0x100000000
+    return int(val)
+
+
+def parse_hex_color(hex_str: str, fallback: int) -> int:
+    try:
+        s = hex_str.strip().lstrip("#")
+        if len(s) == 6:
+            val = int(s, 16) | 0xFF000000
+            return to_int32(val)
+        elif len(s) == 8:
+            val = int(s, 16)
+            return to_int32(val)
+        elif len(s) == 3:
+            r = s[0] * 2
+            g = s[1] * 2
+            b = s[2] * 2
+            val = int(r + g + b, 16) | 0xFF000000
+            return to_int32(val)
+    except Exception:
+        pass
+    return fallback
 
 def russian() -> bool:
     try:
@@ -136,19 +165,17 @@ class DrawHook(MethodHook):
     def before_hooked_method(self, param):
         try:
             if self.plugin.is_active and self.plugin.plugin_enabled:
-                view = param.thisObject
-                self.plugin.suppress_stock_cursor(view)
+                self.plugin.suppress_stock_cursor(param.thisObject)
         except Exception as e:
             self.plugin.log(f"before_on_draw error: {e}")
 
     def after_hooked_method(self, param):
         try:
             if self.plugin.is_active and self.plugin.plugin_enabled:
-                view = param.thisObject
-                canvas = param.args[0]
-                self.plugin.render_cursor(view, canvas)
+                self.plugin.render_cursor(param.thisObject, param.args[0])
         except Exception as e:
-            self.plugin.log(f"after_on_draw error: {e}")
+            import traceback
+            self.plugin.log(f"after_on_draw error: {e}\n{traceback.format_exc()}")
 
 
 class CursorAllowHook(MethodHook):
@@ -179,6 +206,15 @@ class Watch(dynamic_proxy(View.OnAttachStateChangeListener)):
 
 
 class CursorGlidePlugin(BasePlugin):
+    def log(self, text: str):
+        try:
+            self.logger.info(str(text))
+        except Exception:
+            try:
+                super().log(str(text))
+            except Exception:
+                pass
+
     def __init__(self):
         super().__init__()
         self.is_active = False
@@ -196,8 +232,8 @@ class CursorGlidePlugin(BasePlugin):
         self.blink_enabled: bool = True
         self.smear_fade_enabled: bool = True
 
-        # Per-view state tracking (weak keys to prevent any memory leak)
-        self._states = weakref.WeakKeyDictionary()
+        # Per-view state tracking (keyed by Java System.identityHashCode)
+        self._states: Dict[int, CursorState] = {}
 
         # Reusable Android graphics objects to eliminate GC allocations during 60/120fps draw calls
         self._paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -227,75 +263,52 @@ class CursorGlidePlugin(BasePlugin):
             except Exception as error:
                 self.log(f"Factory release error: {error}")
 
-        # Restore default cursor on active views
-        for view in list(self._states.keys()):
-            try:
-                if self._field_allow_draw_cursor is not None:
-                    self._field_allow_draw_cursor.setBoolean(view, True)
-                if hasattr(view, "setAllowDrawCursor"):
-                    view.setAllowDrawCursor(True)
-                view.invalidate()
-            except Exception:
-                pass
-
         self._states.clear()
         self.log("CursorGlide unloaded")
 
     def _install_hooks(self):
-        canvas_cls = find_class("android.graphics.Canvas")
+        Class_cls = jclass("java.lang.Class")
+        canvas_jclass = Class_cls.forName("android.graphics.Canvas")
+        Boolean_cls = jclass("java.lang.Boolean")
         draw_hook = DrawHook(self)
         cursor_hook = CursorAllowHook(self)
 
-        classes_to_hook = [
-            "org.telegram.ui.Components.EditTextBoldCursor",
-            "org.telegram.ui.Components.EditTextCaption",
-            "org.telegram.ui.Components.EditTextEffects",
-        ]
+        try:
+            target_cls = Class_cls.forName("org.telegram.ui.Components.EditTextBoldCursor")
+        except Exception as e:
+            self.log(f"Class.forName error: {e}")
+            return
 
-        hooked_count = 0
-        for class_name in classes_to_hook:
-            try:
-                target_cls = find_class(class_name)
-                if target_cls is None:
-                    continue
+        # 1. Hook onDraw(Canvas)
+        try:
+            on_draw = target_cls.getDeclaredMethod("onDraw", canvas_jclass)
+            on_draw.setAccessible(True)
+            unhook = self.hook_method(on_draw, draw_hook)
+            if unhook:
+                self._hook_objects.append(unhook)
+                self.log("Hooked onDraw on EditTextBoldCursor")
+        except Exception as e:
+            self.log(f"Error hooking onDraw: {e}")
 
-                # 1. Hook onDraw(Canvas)
-                try:
-                    on_draw = target_cls.getDeclaredMethod("onDraw", canvas_cls)
-                    on_draw.setAccessible(True)
-                    unhook = self.hook_method(on_draw, draw_hook)
-                    if unhook:
-                        self._hook_objects.append(unhook)
-                        hooked_count += 1
-                        self.log(f"Hooked onDraw on {class_name}")
-                except Exception as e:
-                    self.log(f"No onDraw on {class_name}: {e}")
+        # 2. Hook setAllowDrawCursor(boolean) using Boolean.TYPE
+        try:
+            set_allow = target_cls.getDeclaredMethod("setAllowDrawCursor", Boolean_cls.TYPE)
+            set_allow.setAccessible(True)
+            unhook = self.hook_method(set_allow, cursor_hook)
+            if unhook:
+                self._hook_objects.append(unhook)
+                self.log("Hooked setAllowDrawCursor on EditTextBoldCursor")
+        except Exception as e:
+            self.log(f"Error hooking setAllowDrawCursor: {e}")
 
-                # 2. Hook setAllowDrawCursor(boolean)
-                try:
-                    set_allow = target_cls.getDeclaredMethod("setAllowDrawCursor", jboolean)
-                    set_allow.setAccessible(True)
-                    unhook = self.hook_method(set_allow, cursor_hook)
-                    if unhook:
-                        self._hook_objects.append(unhook)
-                        self.log(f"Hooked setAllowDrawCursor on {class_name}")
-                except Exception as e:
-                    pass
-
-                # Find allowDrawCursor field if not yet found
-                if self._field_allow_draw_cursor is None:
-                    try:
-                        field = target_cls.getDeclaredField("allowDrawCursor")
-                        field.setAccessible(True)
-                        self._field_allow_draw_cursor = field
-                        self.log(f"Found allowDrawCursor field on {class_name}")
-                    except Exception:
-                        pass
-
-            except Exception as e:
-                self.log(f"Error inspecting {class_name}: {e}")
-
-        self.log(f"Total onDraw hooks installed: {hooked_count}")
+        # 3. Find allowDrawCursor field
+        try:
+            field = target_cls.getDeclaredField("allowDrawCursor")
+            field.setAccessible(True)
+            self._field_allow_draw_cursor = field
+            self.log("Found allowDrawCursor field")
+        except Exception as e:
+            self.log(f"Error finding allowDrawCursor field: {e}")
 
     def suppress_stock_cursor(self, view):
         if self._field_allow_draw_cursor is not None:
@@ -303,11 +316,6 @@ class CursorGlidePlugin(BasePlugin):
                 self._field_allow_draw_cursor.setBoolean(view, False)
             except Exception:
                 pass
-        try:
-            if hasattr(view, "setAllowDrawCursor"):
-                view.setAllowDrawCursor(False)
-        except Exception:
-            pass
 
     def option(self, key: str):
         return self.get_setting(key, DEFAULTS[key])
@@ -325,44 +333,50 @@ class CursorGlidePlugin(BasePlugin):
         self.trail_smear = SMEARS[self.index("smear", len(SMEARS))]
         self.corner_radius_dp = RADII[self.index("corner_radius", len(RADII))]
         self.cursor_shape = self.index("cursor_shape", 5)
-        self.cursor_color_mode = self.index("cursor_color", 5)
+        self.cursor_color_mode = self.index("cursor_color", 10)
+        self.custom_color_hex = str(self.option("custom_color") or "#00E5FF").strip()
         self.blink_enabled = bool(self.option("soft_blink"))
         self.smear_fade_enabled = bool(self.option("smear_fade"))
-
-        for view in list(self._states.keys()):
-            try:
-                view.invalidate()
-            except Exception:
-                pass
 
     def get_cursor_color(self, view: View) -> int:
         mode = self.cursor_color_mode
         if mode == 1:  # Accent
             try:
                 provider = getattr(view, "resourcesProvider", None)
-                return Theme.getColor(Theme.key_chat_messagePanelSend, provider) if provider else Theme.getColor(Theme.key_chat_messagePanelSend)
+                color = Theme.getColor(Theme.key_chat_messagePanelSend, provider) if provider else Theme.getColor(Theme.key_chat_messagePanelSend)
+                return to_int32(color)
             except Exception:
-                return 0xFF2AABEE
-        elif mode == 2:  # Neon Cyan (classic terminal / NeoVide vibe)
-            return 0xFF00E5FF
-        elif mode == 3:  # Pure White
-            return 0xFFFFFFFF
-        elif mode == 4:  # Rainbow
+                return to_int32(0xFF2AABEE)
+        elif mode == 2:  # Neon Cyan
+            return to_int32(0xFF00E5FF)
+        elif mode == 3:  # Matrix Green
+            return to_int32(0xFF00FF66)
+        elif mode == 4:  # Cyberpunk Pink
+            return to_int32(0xFFFF007F)
+        elif mode == 5:  # Pure White
+            return to_int32(0xFFFFFFFF)
+        elif mode == 6:  # Amber Gold
+            return to_int32(0xFFFFB300)
+        elif mode == 7:  # Sunset Orange
+            return to_int32(0xFFFF5722)
+        elif mode == 8:  # Rainbow
             hue = (time.perf_counter() * 100.0) % 360.0
             r, g, b = colorsys.hsv_to_rgb(hue / 360.0, 0.85, 1.0)
-            return (0xFF << 24) | (int(r * 255) << 16) | (int(g * 255) << 8) | int(b * 255)
-        else:  # Theme
+            return to_int32((0xFF << 24) | (int(r * 255) << 16) | (int(g * 255) << 8) | int(b * 255))
+        elif mode == 9:  # Custom HEX
+            return parse_hex_color(self.custom_color_hex, to_int32(0xFF00E5FF))
+        else:  # 0: Theme
             try:
                 provider = getattr(view, "resourcesProvider", None)
                 color = Theme.getColor(Theme.key_chat_messagePanelCursor, provider) if provider else Theme.getColor(Theme.key_chat_messagePanelCursor)
                 if color != 0:
-                    return color
+                    return to_int32(color)
             except Exception:
                 pass
             try:
-                return view.getCurrentTextColor()
+                return to_int32(view.getCurrentTextColor())
             except Exception:
-                return 0xFF2AABEE
+                return to_int32(0xFF00E5FF)
 
     def render_cursor(self, view, canvas: Canvas):
         if not view.isShown():
@@ -396,32 +410,33 @@ class CursorGlidePlugin(BasePlugin):
             return
 
         text = layout.getText()
-        text_len = text.length() if text is not None else 0
+        if text is None:
+            text_len = 0
+        elif hasattr(text, "length"):
+            try:
+                text_len = int(text.length())
+            except Exception:
+                text_len = len(str(text))
+        else:
+            text_len = len(text)
+
         if sel_start > text_len:
             return
 
         # Coordinate computation in view space
         line = layout.getLineForOffset(sel_start)
         primary_x = float(layout.getPrimaryHorizontal(sel_start))
-
         compound_left = float(view.getCompoundPaddingLeft())
-        scroll_x = float(view.getScrollX())
-        cx = primary_x + compound_left - scroll_x
+        cx = primary_x + compound_left
 
-        baseline = float(layout.getLineBaseline(line))
         padding_top = float(view.getTotalPaddingTop())
-        scroll_y = float(view.getScrollY())
-        line_baseline = baseline + padding_top - scroll_y
+        line_top = float(layout.getLineTop(line)) + padding_top
+        line_bottom = float(layout.getLineBottom(line)) + padding_top
+        line_h = max(1.0, line_bottom - line_top)
+        cy = (line_top + line_bottom) * 0.5
+        cy_bottom = line_bottom
 
         paint = view.getPaint()
-        fm = paint.getFontMetrics()
-        ascent = float(fm.ascent)
-        descent = float(fm.descent)
-
-        cy_top = line_baseline + ascent
-        cy_bottom = line_baseline + descent
-        line_h = max(1.0, cy_bottom - cy_top)
-        cy = (cy_top + cy_bottom) * 0.5
 
         dp = AndroidUtilities.dp
 
@@ -442,7 +457,7 @@ class CursorGlidePlugin(BasePlugin):
             h = line_h
             target_cx = cx
             target_cy = cy
-        elif shape == 3:  # Block (Terminal / NeoVide)
+        elif shape == 3:  # Block
             char_w = 0.0
             if sel_start < text_len:
                 next_x = float(layout.getPrimaryHorizontal(sel_start + 1))
@@ -472,8 +487,14 @@ class CursorGlidePlugin(BasePlugin):
             target_cx = cx
             target_cy = cy
 
+        # Clamp target_cx to never be clipped on the left padding edge
+        min_cx = float(view.getPaddingLeft()) + w * 0.5
+        target_cx = max(min_cx, target_cx)
+
+        System = jclass("java.lang.System")
+        view_id = int(System.identityHashCode(view))
         now = time.perf_counter()
-        state = self._states.get(view)
+        state = self._states.get(view_id)
 
         if state is None:
             state = CursorState(
@@ -489,7 +510,11 @@ class CursorGlidePlugin(BasePlugin):
                 last_offset=sel_start,
                 last_active=now,
             )
-            self._states[view] = state
+            self._states[view_id] = state
+            if len(self._states) > 50:
+                expired = [k for k, s in self._states.items() if (now - s.last_active) > 60.0]
+                for k in expired:
+                    self._states.pop(k, None)
 
         # Detect cursor movement or selection offset shift
         moved = (
@@ -552,8 +577,8 @@ class CursorGlidePlugin(BasePlugin):
             return
 
         color_int = self.get_cursor_color(view)
-        self._paint.setColor(color_int)
-        self._paint.setAlpha(alpha)
+        self._paint.setColor(jint(to_int32(color_int)))
+        self._paint.setAlpha(int(alpha))
 
         corner_radius_px = float(dp(self.corner_radius_dp))
 
@@ -592,11 +617,11 @@ class CursorGlidePlugin(BasePlugin):
             # Optional trail smear gradient fade along the movement vector
             if self.smear_fade_enabled and move_dist > dp(4):
                 tail_alpha = int(alpha * 0.70)
-                tail_color = (tail_alpha << 24) | (color_int & 0x00FFFFFF)
-                head_color = (alpha << 24) | (color_int & 0x00FFFFFF)
+                tail_color = to_int32((tail_alpha << 24) | (color_int & 0x00FFFFFF))
+                head_color = to_int32((alpha << 24) | (color_int & 0x00FFFFFF))
                 shader = LinearGradient(
-                    trail_cx, trail_cy, lead_cx, lead_cy,
-                    tail_color, head_color, Shader.TileMode.CLAMP,
+                    float(trail_cx), float(trail_cy), float(lead_cx), float(lead_cy),
+                    jint(tail_color), jint(head_color), Shader.TileMode.CLAMP,
                 )
                 self._paint.setShader(shader)
             else:
@@ -696,48 +721,71 @@ class CursorGlidePlugin(BasePlugin):
                 on_change=self.changed,
             )
 
+        def input_box(key: str, ru_text: str, en_text: str, ru_sub: str, en_sub: str, icon: str):
+            return Input(
+                key=key,
+                text=tr(ru_text, en_text),
+                default=DEFAULTS[key],
+                subtext=tr(ru_sub, en_sub),
+                icon=icon,
+                on_change=self.changed,
+            )
+
         return [
-            Header(tr("предпросмотр", "preview")),
+            Header(tr("Предпросмотр", "Preview")),
             self.preview(),
-            Header(tr("основное", "general")),
-            switch("enabled", "включить анимацию", "enable animation", "msg_edit"),
-            Header(tr("анимация", "animation")),
-            selector("speed", "длительность", "duration", (
-                ("быстро (100 мс)", "fast (100 ms)"),
-                ("как в Ghostty (150 мс)", "Ghostty default (150 ms)"),
-                ("плавно (200 мс)", "smooth (200 ms)"),
-                ("медленно (280 мс)", "slow (280 ms)"),
+            Header(tr("Основное", "General")),
+            switch("enabled", "Включить анимацию", "Enable animation", "msg_edit"),
+            Header(tr("Анимация", "Animation")),
+            selector("speed", "Длительность", "Duration", (
+                ("Быстро (100 мс)", "Fast (100 ms)"),
+                ("Сбалансированно (150 мс)", "Balanced (150 ms)"),
+                ("Плавно (200 мс)", "Smooth (200 ms)"),
+                ("Медленно (280 мс)", "Slow (280 ms)"),
             ), "msg_speed"),
-            selector("smear", "растяжение шлейфа", "trail smear", (
-                ("без шлейфа (0.0)", "no smear (0.0)"),
-                ("умеренное (0.5)", "subtle (0.5)"),
-                ("как в Ghostty (0.85)", "Ghostty default (0.85)"),
-                ("максимальное (1.0)", "maximum (1.0)"),
+            selector("smear", "Растяжение шлейфа", "Trail smear", (
+                ("Без шлейфа (0.0)", "No smear (0.0)"),
+                ("Умеренное (0.5)", "Subtle (0.5)"),
+                ("Выраженное (0.85)", "Pronounced (0.85)"),
+                ("Максимальное (1.0)", "Maximum (1.0)"),
             ), "msg_blur_linear"),
-            selector("corner_radius", "скругление углов", "corner radius", (
-                ("без скругления (0 dp)", "sharp (0 dp)"),
-                ("легкое (1.5 dp)", "slight (1.5 dp)"),
-                ("как в Ghostty (3.0 dp)", "Ghostty default (3.0 dp)"),
-                ("закругленное (5.0 dp)", "rounded (5.0 dp)"),
-                ("капсула", "capsule"),
+            selector("corner_radius", "Скругление углов", "Corner radius", (
+                ("Без скругления (0 dp)", "Sharp (0 dp)"),
+                ("Лёгкое (1.5 dp)", "Slight (1.5 dp)"),
+                ("Среднее (3.0 dp)", "Medium (3.0 dp)"),
+                ("Закруглённое (5.0 dp)", "Rounded (5.0 dp)"),
+                ("Капсула", "Capsule"),
             ), "msg_photo_curve"),
-            Header(tr("курсор", "cursor")),
-            selector("cursor_shape", "форма курсора", "cursor shape", (
-                ("тонкая линия (1.5 dp)", "thin line (1.5 dp)"),
-                ("обычная линия (2.5 dp)", "normal line (2.5 dp)"),
-                ("жирная линия (4.0 dp)", "bold line (4.0 dp)"),
-                ("блок (NeoVide / Терминал)", "block (NeoVide / Terminal)"),
-                ("подчёркивание", "underline"),
+            Header(tr("Курсор", "Cursor")),
+            selector("cursor_shape", "Форма курсора", "Cursor shape", (
+                ("Тонкая линия (1.5 dp)", "Thin line (1.5 dp)"),
+                ("Обычная линия (2.5 dp)", "Normal line (2.5 dp)"),
+                ("Жирная линия (4.0 dp)", "Bold line (4.0 dp)"),
+                ("Прямоугольный блок", "Solid block"),
+                ("Подчёркивание", "Underline"),
             ), "msg_photoeditor"),
-            selector("cursor_color", "цвет курсора", "cursor color", (
-                ("из темы Telegram", "Telegram theme"),
-                ("акцентный", "accent"),
-                ("неоновый бирюзовый", "neon cyan"),
-                ("белый", "white"),
-                ("переливающийся (Rainbow)", "rainbow"),
+            selector("cursor_color", "Цвет курсора", "Cursor color", (
+                ("Из темы Telegram", "Telegram theme"),
+                ("Акцентный цвет чата", "Chat accent"),
+                ("Неоновый бирюзовый (Cyan)", "Neon cyan"),
+                ("Неоновый зелёный (Matrix)", "Matrix green"),
+                ("Киберпанк розовый", "Cyberpunk pink"),
+                ("Чистый белый", "Pure white"),
+                ("Янтарный / золотой", "Amber gold"),
+                ("Огненный оранжевый", "Sunset orange"),
+                ("Переливающийся (Rainbow)", "Rainbow (dynamic)"),
+                ("Свой HEX-код (поле ниже)", "Custom HEX (field below)"),
             ), "msg_palette"),
-            switch("soft_blink", "мягкое мигание", "soft pulsing blink", "msg_autodelete"),
-            switch("smear_fade", "затухание шлейфа", "trail gradient fade", "msg_blur_radial"),
+            input_box(
+                "custom_color",
+                "Свой HEX-код цвета",
+                "Custom HEX color code",
+                "Формат: #RRGGBB (например: #00E5FF, #FF0055, #00FF66)",
+                "Format: #RRGGBB (e.g.: #00E5FF, #FF0055, #00FF66)",
+                "msg_edit",
+            ),
+            switch("soft_blink", "Мягкое мигание", "Soft pulsing blink", "msg_autodelete"),
+            switch("smear_fade", "Затухание шлейфа", "Trail gradient fade", "msg_blur_radial"),
         ]
 
     def preview(self):
@@ -823,7 +871,7 @@ class CursorGlidePlugin(BasePlugin):
     @staticmethod
     def frames(ru: bool):
         first = "Печатаю с анимацией" if ru else "Smooth cursor glide"
-        second = "Как в Ghostty и NeoVide!" if ru else "Like Ghostty & NeoVide!"
+        second = "Плавное скольжение курсора!" if ru else "Smooth gliding caret cursor!"
         cut = first.rfind(" ")
         head = first[:cut] + "\n"
         frames = [(first[:count], 140) for count in range(1, len(first) + 1)]
