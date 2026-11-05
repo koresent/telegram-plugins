@@ -8,19 +8,18 @@ Embed web services (Vikunja, Notion, Jira, Linear, Grafana, GitHub, custom dashb
 
 ## Features
 
-- **Topic Tile Design**: Web tabs are styled like native Telegram forum topics (custom emoji + title card) with an optional mini `🌐` globe badge indicator.
-- **Multiple Display Modes**:
-  - **Tab Strip Under ActionBar**: Horizontal scrolling row of topic-like tiles positioned directly beneath the top bar.
-  - **Buttons in ActionBar**: Compact emoji action buttons integrated right into the top navigation bar.
-  - **Single Popup Menu**: A single `🌐` globe button in the top bar opening a dropdown list of all configured web apps.
-- **Persistent Sessions & Logins**: Full support for `CookieManager` and `DOM Storage` (`localStorage`/`sessionStorage`). Log in once to your self-hosted or cloud service and stay logged in.
+- **Seamless Topic Integration**: Custom web tabs are placed directly inside Telegram's existing vertical topics sidebar (and top horizontal pills), positioned neatly at the bottom right before "+ New Topic".
+- **Native Telegram Styling**: Clean topic typography, theme colors, and selector ripples that look and feel 100% native.
+- **Native Emoji Picker**: Supports selecting standard and animated Telegram custom emojis directly via the native emoji picker dialog in plugin settings.
+- **Vector SVG Toolbar Controls**: Clean vector icons (`ic_ab_back`, `msg_retry`, `filled_link`, `ic_ab_close`) tinted to the active theme.
+- **Persistent Sessions & Logins**: Full support for `CookieManager` and `DOM Storage` (`localStorage`/`sessionStorage`). Log in once to your self-hosted or cloud service (e.g. Vikunja, Kanban) and stay logged in.
 - **Smart Page Resume (`remember_last_page`)**: Automatically tracks in-page navigation and reopens the exact task, board, or document you last visited instead of resetting to the base URL.
 - **Full-featured Web Container**:
   - High-performance `BottomSheet` dialog opening directly inside the chat.
-  - Toolbar with web app title, active domain, Back (`◀`), Refresh (`🔄`), Open in Browser (`↗`), and Close (`✕`).
+  - Toolbar with web app title, active domain, Back, Refresh, Open in Browser, and Close controls.
   - Animated horizontal progress bar.
   - Keyboard-friendly with proper soft input resizing for editing tasks and forms.
-- **Dynamic Settings UI**: Add unlimited chat groups and unlimited web tabs per group dynamically from the plugin settings page.
+- **Dynamic Multi-Group Configuration**: Add unlimited chat groups and unlimited web tabs per group dynamically from the plugin settings page.
 
 ---
 

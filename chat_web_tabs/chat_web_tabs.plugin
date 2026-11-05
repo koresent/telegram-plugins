@@ -13,6 +13,7 @@ from android.content import Context, Intent
 from android.graphics import Color, Typeface
 from android.graphics.drawable import GradientDrawable
 from android.net import Uri
+from android.text import TextUtils
 from android.util import TypedValue
 from android.view import Gravity, View, ViewGroup
 from android.webkit import (
@@ -24,14 +25,14 @@ from android.webkit import (
 )
 from android.widget import (
     FrameLayout,
-    HorizontalScrollView,
     ImageView,
     LinearLayout,
     ProgressBar,
     TextView,
 )
-from java import dynamic_proxy, jclass
-from org.telegram.messenger import AndroidUtilities, LocaleController
+from java import dynamic_proxy, jclass, jint
+from org.telegram.messenger import AndroidUtilities, LocaleController, MessageObject
+from org.telegram.ui import SelectAnimatedEmojiDialog
 from org.telegram.ui.ActionBar import (
     ActionBar,
     ActionBarMenu,
@@ -39,6 +40,7 @@ from org.telegram.ui.ActionBar import (
     BottomSheet,
     Theme,
 )
+from extera_utils.classes import Base, java_subclass, joverload
 
 from android_utils import run_on_ui_thread
 from base_plugin import BasePlugin, MethodHook
@@ -48,11 +50,9 @@ __id__ = "chat_web_tabs"
 __name__ = "Chat Web Tabs"
 __description__ = "Custom web apps and pinned web tabs with persistent sessions for Telegram chats"
 __author__ = "@koresent"
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __icon__ = "exteraPlugins/1"
 __category__ = "general"
-
-TAG_WEB_TABS_CONTAINER = "chat_web_tabs_container"
 
 DEFAULT_CONFIG = [
     {
@@ -99,12 +99,29 @@ def normalize_chat_id(val: Any) -> str:
 def matches_chat_id(configured: Any, actual: Any) -> bool:
     c_str = str(configured).strip()
     a_str = str(actual).strip()
+    if not c_str or not a_str:
+        return False
     if c_str == a_str:
         return True
     return normalize_chat_id(c_str) == normalize_chat_id(a_str)
 
 
-from extera_utils.classes import Base, java_subclass, joverload
+def get_activity_from_context(ctx):
+    from android.content import ContextWrapper
+    from android.app import Activity
+    curr = ctx
+    while isinstance(curr, ContextWrapper):
+        if isinstance(curr, Activity):
+            return curr
+        curr = curr.getBaseContext()
+    try:
+        LaunchActivity = jclass("org.telegram.ui.LaunchActivity")
+        if LaunchActivity.instance is not None:
+            return LaunchActivity.instance
+    except Exception:
+        pass
+    return None
+
 
 class OnClickListenerProxy(dynamic_proxy(View.OnClickListener)):
     def __init__(self, callback):
@@ -114,6 +131,19 @@ class OnClickListenerProxy(dynamic_proxy(View.OnClickListener)):
     def onClick(self, view):
         try:
             self.callback(view)
+        except Exception:
+            pass
+
+
+class OnDismissListenerProxy(dynamic_proxy(jclass("android.content.DialogInterface$OnDismissListener"))):
+    def __init__(self, callback):
+        super().__init__()
+        self.callback = callback
+
+    def onDismiss(self, dialog):
+        try:
+            if self.callback:
+                self.callback()
         except Exception:
             pass
 
@@ -166,7 +196,43 @@ class CustomWebClient(Base):
             return False
 
 
-class ChatViewCreateHook(MethodHook):
+@java_subclass(SelectAnimatedEmojiDialog)
+class MyEmojiPicker(Base):
+    @joverload("onEmojiSelected", [
+        "android.view.View",
+        "java.lang.Long",
+        "org.telegram.tgnet.TLRPC$Document",
+        "org.telegram.tgnet.tl.TL_stars$TL_starGiftUnique",
+        "java.lang.Integer"
+    ])
+    def on_emoji(self, view, doc_id, doc, star_gift, until):
+        try:
+            cb = getattr(self, "on_selected_callback", None)
+            if cb:
+                cb(view, doc_id, doc, star_gift, until)
+        except Exception:
+            pass
+
+
+def get_dialog_id(ttv) -> Optional[int]:
+    try:
+        f = ttv.getClass().getDeclaredField("dialogId")
+        f.setAccessible(True)
+        return int(f.getLong(ttv))
+    except Exception:
+        pass
+    try:
+        f = ttv.getClass().getDeclaredField("fragment")
+        f.setAccessible(True)
+        frag = f.get(ttv)
+        if frag is not None:
+            return int(frag.getDialogId())
+    except Exception:
+        pass
+    return None
+
+
+class VerticalTabsHook(MethodHook):
     def __init__(self, plugin: "ChatWebTabsPlugin"):
         super().__init__()
         self.plugin = plugin
@@ -175,20 +241,73 @@ class ChatViewCreateHook(MethodHook):
         try:
             if not self.plugin.is_active:
                 return
-            fragment = param.thisObject
-            root_view = param.getResult()
-            if root_view is None:
-                return
-
-            dialog_id = self.plugin.get_fragment_dialog_id(fragment)
+            ttv = param.thisObject
+            items = param.args[0]
+            dialog_id = get_dialog_id(ttv)
             if dialog_id is None:
                 return
 
             group_config = self.plugin.find_group_config(dialog_id)
-            if group_config and group_config.get("tabs"):
-                self.plugin.attach_tabs_ui(fragment, root_view, group_config)
+            if not group_config or not group_config.get("tabs"):
+                return
+
+            context = ttv.getContext()
+            UItem = jclass("org.telegram.ui.Components.UItem")
+
+            # Place web tabs at the bottom, right before the "+ New Topic" button (id == -2)
+            insert_idx = items.size()
+            for i in range(items.size()):
+                it = items.get(i)
+                if getattr(it, "id", 0) == -2:
+                    insert_idx = i
+                    break
+
+            tabs = group_config.get("tabs", [])
+            for tab in reversed(tabs):
+                tile = self.plugin.create_sidebar_tile_view(context, tab)
+                uitem = UItem.asCustom(tile)
+                items.add(insert_idx, uitem)
         except Exception as e:
-            self.plugin.log(f"ChatViewCreateHook error: {e}")
+            self.plugin.log(f"VerticalTabsHook error: {e}")
+
+
+class HorizontalTabsHook(MethodHook):
+    def __init__(self, plugin: "ChatWebTabsPlugin"):
+        super().__init__()
+        self.plugin = plugin
+
+    def after_hooked_method(self, param):
+        try:
+            if not self.plugin.is_active:
+                return
+            ttv = param.thisObject
+            items = param.args[0]
+            dialog_id = get_dialog_id(ttv)
+            if dialog_id is None:
+                return
+
+            group_config = self.plugin.find_group_config(dialog_id)
+            if not group_config or not group_config.get("tabs"):
+                return
+
+            context = ttv.getContext()
+            UItem = jclass("org.telegram.ui.Components.UItem")
+
+            # Place horizontal web pills before "+ New Topic" button
+            insert_idx = items.size()
+            for i in range(items.size()):
+                it = items.get(i)
+                if getattr(it, "id", 0) == -2:
+                    insert_idx = i
+                    break
+
+            tabs = group_config.get("tabs", [])
+            for tab in reversed(tabs):
+                tile = self.plugin.create_horizontal_tab_view(context, tab)
+                uitem = UItem.asCustom(tile)
+                items.add(insert_idx, uitem)
+        except Exception as e:
+            self.plugin.log(f"HorizontalTabsHook error: {e}")
 
 
 class ChatWebTabsPlugin(BasePlugin):
@@ -206,7 +325,6 @@ class ChatWebTabsPlugin(BasePlugin):
         self.is_active = False
         self._hook_objects = []
         self._groups: List[Dict[str, Any]] = []
-        self._global_display_mode: int = 0  # 0: Tab strip under ActionBar, 1: Buttons in ActionBar, 2: Popup in ActionBar
         self._show_globe_badge: bool = True
 
     def on_plugin_load(self):
@@ -227,20 +345,31 @@ class ChatWebTabsPlugin(BasePlugin):
 
     def _install_hooks(self):
         Class_cls = jclass("java.lang.Class")
-        Context_cls = Class_cls.forName("android.content.Context")
-        hook = ChatViewCreateHook(self)
+        ttv_cls = Class_cls.forName("org.telegram.ui.Components.TopicsTabsView")
+        arr_cls = Class_cls.forName("java.util.ArrayList")
+        adp_cls = Class_cls.forName("org.telegram.ui.Components.UniversalAdapter")
 
-        for class_name in ("org.telegram.ui.ChatActivity", "org.telegram.ui.TopicsFragment"):
-            try:
-                target_cls = Class_cls.forName(class_name)
-                create_view_method = target_cls.getDeclaredMethod("createView", Context_cls)
-                create_view_method.setAccessible(True)
-                unhook = self.hook_method(create_view_method, hook)
-                if unhook:
-                    self._hook_objects.append(unhook)
-                    self.log(f"Hooked createView on {class_name}")
-            except Exception as e:
-                self.log(f"Error hooking createView on {class_name}: {e}")
+        # 1. Hook fillVerticalTabs(ArrayList, UniversalAdapter) for the left side panel
+        try:
+            m_vertical = ttv_cls.getDeclaredMethod("fillVerticalTabs", arr_cls, adp_cls)
+            m_vertical.setAccessible(True)
+            unhook = self.hook_method(m_vertical, VerticalTabsHook(self))
+            if unhook:
+                self._hook_objects.append(unhook)
+                self.log("Hooked fillVerticalTabs on TopicsTabsView")
+        except Exception as e:
+            self.log(f"Error hooking fillVerticalTabs: {e}")
+
+        # 2. Hook fillHorizontalTabs(ArrayList, UniversalAdapter) for top horizontal mode
+        try:
+            m_horizontal = ttv_cls.getDeclaredMethod("fillHorizontalTabs", arr_cls, adp_cls)
+            m_horizontal.setAccessible(True)
+            unhook = self.hook_method(m_horizontal, HorizontalTabsHook(self))
+            if unhook:
+                self._hook_objects.append(unhook)
+                self.log("Hooked fillHorizontalTabs on TopicsTabsView")
+        except Exception as e:
+            self.log(f"Error hooking fillHorizontalTabs: {e}")
 
     def load_config(self):
         try:
@@ -255,7 +384,6 @@ class ChatWebTabsPlugin(BasePlugin):
             self.log(f"Error loading groups config: {e}")
             self._groups = [dict(g) for g in DEFAULT_CONFIG]
 
-        self._global_display_mode = int(self.get_setting("global_display_mode", 0))
         self._show_globe_badge = bool(self.get_setting("show_globe_badge", True))
 
     def save_config(self, reload_ui: bool = False):
@@ -263,25 +391,6 @@ class ChatWebTabsPlugin(BasePlugin):
             self.set_setting("groups_config", json.dumps(self._groups), reload_settings=reload_ui)
         except Exception as e:
             self.log(f"Error saving groups config: {e}")
-
-    def get_fragment_dialog_id(self, fragment) -> Optional[int]:
-        try:
-            if hasattr(fragment, "getDialogId"):
-                return int(fragment.getDialogId())
-        except Exception:
-            pass
-        try:
-            if hasattr(fragment, "chatId"):
-                cid = int(fragment.chatId)
-                return -cid if cid > 0 else cid
-        except Exception:
-            pass
-        try:
-            if hasattr(fragment, "dialogId"):
-                return int(fragment.dialogId)
-        except Exception:
-            pass
-        return None
 
     def find_group_config(self, dialog_id: int) -> Optional[Dict[str, Any]]:
         for group in self._groups:
@@ -291,135 +400,61 @@ class ChatWebTabsPlugin(BasePlugin):
         return None
 
     # =========================================================================
-    # UI In-Chat Attachment
+    # Sidebar Tile View (Inserted into left Topics panel)
     # =========================================================================
 
-    def attach_tabs_ui(self, fragment, root_view: View, group_config: Dict[str, Any]):
-        tabs = group_config.get("tabs", [])
-        if not tabs:
-            return
-
-        run_on_ui_thread(lambda: self._do_attach_tabs(fragment, root_view, tabs))
-
-    def _do_attach_tabs(self, fragment, root_view: View, tabs: List[Dict[str, Any]]):
-        try:
-            context = root_view.getContext()
-            action_bar = getattr(fragment, "actionBar", None)
-            display_mode = self._global_display_mode
-
-            if display_mode == 0:
-                # Mode 0: Clean Tab Strip under ActionBar (matching forum topics aesthetic)
-                self._attach_strip_under_action_bar(fragment, root_view, context, tabs)
-            elif display_mode == 1:
-                # Mode 1: Individual buttons in ActionBar
-                if action_bar:
-                    self._attach_buttons_to_action_bar(action_bar, context, tabs)
-            elif display_mode == 2:
-                # Mode 2: Single popup button in ActionBar
-                if action_bar:
-                    self._attach_popup_to_action_bar(action_bar, context, tabs)
-        except Exception as e:
-            self.log(f"Error attaching tabs UI: {e}")
-
-    def _attach_strip_under_action_bar(self, fragment, root_view: View, context: Context, tabs: List[Dict[str, Any]]):
-        try:
-            # Check if container already exists
-            existing = root_view.findViewWithTag(TAG_WEB_TABS_CONTAINER)
-            if existing is not None:
-                if isinstance(existing.getParent(), ViewGroup):
-                    existing.getParent().removeView(existing)
-
-            # Strip ScrollView
-            scroll = HorizontalScrollView(context)
-            scroll.setTag(TAG_WEB_TABS_CONTAINER)
-            scroll.setHorizontalScrollBarEnabled(False)
-            scroll.setOverScrollMode(View.OVER_SCROLL_NEVER)
-
-            # Background & border
-            bg_color = Theme.getColor(Theme.key_windowBackgroundWhite)
-            scroll.setBackgroundColor(bg_color)
-
-            # Container
-            container = LinearLayout(context)
-            container.setOrientation(LinearLayout.HORIZONTAL)
-            container.setGravity(Gravity.CENTER_VERTICAL)
-            container.setPadding(dp(12), dp(6), dp(12), dp(6))
-
-            for tab in tabs:
-                tile = self._create_topic_tile_view(context, tab)
-                container.addView(tile)
-
-            scroll.addView(container)
-
-            # Insert into root_view (SizeNotifierFrameLayout / FrameLayout)
-            if isinstance(root_view, ViewGroup):
-                lp = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(66),
-                    Gravity.TOP | Gravity.LEFT
-                )
-                lp.topMargin = dp(56)  # Standard ActionBar height
-                root_view.addView(scroll, lp)
-        except Exception as e:
-            self.log(f"Error creating tab strip: {e}")
-
-    def _create_topic_tile_view(self, context: Context, tab: Dict[str, Any]) -> View:
+    def create_sidebar_tile_view(self, context: Context, tab: Dict[str, Any]) -> View:
         tile = LinearLayout(context)
         tile.setOrientation(LinearLayout.VERTICAL)
         tile.setGravity(Gravity.CENTER_HORIZONTAL)
-        tile.setPadding(dp(6), dp(2), dp(6), dp(2))
+        tile.setPadding(dp(2), dp(6), dp(2), dp(4))
 
-        # Icon card container (rounded box like Telegram topics)
-        card_size = dp(38)
-        card = FrameLayout(context)
-        card_lp = LinearLayout.LayoutParams(card_size, card_size)
-        card_lp.gravity = Gravity.CENTER_HORIZONTAL
-        card.setLayoutParams(card_lp)
+        # Size matching vertical topic tiles in left sidebar
+        tile.setLayoutParams(ViewGroup.LayoutParams(dp(56), dp(62)))
 
-        # Rounded background
-        card_bg = GradientDrawable()
-        card_bg.setShape(GradientDrawable.RECTANGLE)
-        card_bg.setCornerRadius(dp(10))
-        # Subtle theme surface color
-        card_bg_color = Theme.getColor(Theme.key_chat_inBubble)
-        card_bg.setColor(card_bg_color)
-        card.setBackground(card_bg)
+        # Icon container (matching native topic tab icon in vertical topics bar)
+        icon_box = FrameLayout(context)
+        icon_box_lp = LinearLayout.LayoutParams(dp(32), dp(32))
+        icon_box_lp.gravity = Gravity.CENTER_HORIZONTAL
+        icon_box.setLayoutParams(icon_box_lp)
 
-        # Emoji TextView
+        # Centered Emoji (clean, no artificial box background, matching topic items)
         emoji_view = TextView(context)
         emoji_view.setText(tab.get("emoji", "📋") or "📋")
-        emoji_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 20)
+        emoji_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 24)
         emoji_view.setGravity(Gravity.CENTER)
-        card.addView(emoji_view, FrameLayout.LayoutParams(
+        icon_box.addView(emoji_view, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT,
             Gravity.CENTER
         ))
 
-        # Mini globe badge 🌐 in top-right corner
+        # Vector Globe badge (SVG / Vector Drawable from Telegram tinted to theme)
         if self._show_globe_badge:
-            globe_badge = TextView(context)
-            globe_badge.setText("🌐")
-            globe_badge.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 9)
-            globe_badge.setGravity(Gravity.CENTER)
-            badge_lp = FrameLayout.LayoutParams(dp(14), dp(14), Gravity.TOP | Gravity.RIGHT)
-            card.addView(globe_badge, badge_lp)
+            globe_iv = ImageView(context)
+            r_drawable = jclass("org.telegram.messenger.R$drawable")
+            globe_iv.setImageResource(r_drawable.msg_language)
+            globe_iv.setColorFilter(Theme.getColor(Theme.key_windowBackgroundWhiteGrayIcon))
+            badge_lp = FrameLayout.LayoutParams(dp(11), dp(11), Gravity.TOP | Gravity.RIGHT)
+            icon_box.addView(globe_iv, badge_lp)
 
-        tile.addView(card)
+        tile.addView(icon_box)
 
-        # Title TextView below the icon
+        # Label underneath (matching "Бэкап" and "Заметки" styling in Topics bar)
         title_view = TextView(context)
         title_view.setText(tab.get("title", "Tab") or "Tab")
-        title_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 11)
-        title_view.setTypeface(Typeface.DEFAULT_BOLD)
-        title_view.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText))
+        title_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 10.5)
+        title_view.setTypeface(Typeface.DEFAULT)
+        title_view.setTextColor(Theme.getColor(Theme.key_chats_nameMessage_threeLines))
         title_view.setSingleLine(True)
+        title_view.setEllipsize(TextUtils.TruncateAt.END)
         title_view.setGravity(Gravity.CENTER_HORIZONTAL)
-        title_lp = LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT)
-        title_lp.topMargin = dp(3)
+        title_lp = LinearLayout.LayoutParams(dp(54), ViewGroup.LayoutParams.WRAP_CONTENT)
+        title_lp.topMargin = dp(2)
+        title_lp.gravity = Gravity.CENTER_HORIZONTAL
         tile.addView(title_view, title_lp)
 
-        # Ripple on click
+        # Native selector ripple
         try:
             selector = Theme.createSelectorDrawable(Theme.getColor(Theme.key_listSelector), 2)
             tile.setBackground(selector)
@@ -428,260 +463,244 @@ class ChatWebTabsPlugin(BasePlugin):
 
         tile.setClickable(True)
         tile.setFocusable(True)
-        tile.setOnClickListener(OnClickListenerProxy(lambda v: self.open_web_tab(context, tab)))
+        tile.setOnClickListener(OnClickListenerProxy(lambda v: self.open_web_tab(v, tab)))
 
         return tile
 
-    def _attach_buttons_to_action_bar(self, action_bar: ActionBar, context: Context, tabs: List[Dict[str, Any]]):
-        try:
-            menu = action_bar.createMenu()
-            for tab in tabs:
-                item_btn = FrameLayout(context)
-                item_btn.setPadding(dp(8), 0, dp(8), 0)
+    # =========================================================================
+    # Horizontal Tab View (Pill for top topics bar)
+    # =========================================================================
 
-                emoji_txt = TextView(context)
-                emoji_txt.setText(tab.get("emoji", "📋") or "📋")
-                emoji_txt.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 19)
-                emoji_txt.setGravity(Gravity.CENTER)
-                item_btn.addView(emoji_txt, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER))
+    def create_horizontal_tab_view(self, context: Context, tab: Dict[str, Any]) -> View:
+        pill = LinearLayout(context)
+        pill.setOrientation(LinearLayout.HORIZONTAL)
+        pill.setGravity(Gravity.CENTER_VERTICAL)
+        pill.setPadding(dp(10), dp(4), dp(10), dp(4))
 
-                if self._show_globe_badge:
-                    globe = TextView(context)
-                    globe.setText("🌐")
-                    globe.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 8)
-                    item_btn.addView(globe, FrameLayout.LayoutParams(dp(12), dp(12), Gravity.TOP | Gravity.RIGHT))
+        bg = GradientDrawable()
+        bg.setShape(GradientDrawable.RECTANGLE)
+        bg.setCornerRadius(dp(15))
+        bg.setColor(Theme.getColor(Theme.key_chat_inBubble))
+        pill.setBackground(bg)
 
-                item_btn.setClickable(True)
-                item_btn.setOnClickListener(OnClickListenerProxy(lambda v, t=tab: self.open_web_tab(context, t)))
-                menu.addView(item_btn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        except Exception as e:
-            self.log(f"Error attaching buttons to action bar: {e}")
+        emoji_tv = TextView(context)
+        emoji_tv.setText(tab.get("emoji", "📋") or "📋")
+        emoji_tv.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14)
+        pill.addView(emoji_tv)
 
-    def _attach_popup_to_action_bar(self, action_bar: ActionBar, context: Context, tabs: List[Dict[str, Any]]):
-        try:
-            menu = action_bar.createMenu()
-            btn = FrameLayout(context)
-            btn.setPadding(dp(10), 0, dp(10), 0)
+        if self._show_globe_badge:
+            globe = ImageView(context)
+            r_drawable = jclass("org.telegram.messenger.R$drawable")
+            globe.setImageResource(r_drawable.msg_language)
+            globe.setColorFilter(Theme.getColor(Theme.key_windowBackgroundWhiteBlueHeader))
+            glp = LinearLayout.LayoutParams(dp(12), dp(12))
+            glp.leftMargin = dp(3)
+            pill.addView(globe, glp)
 
-            globe_icon = TextView(context)
-            globe_icon.setText("🌐")
-            globe_icon.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 20)
-            globe_icon.setGravity(Gravity.CENTER)
-            btn.addView(globe_icon, FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER))
+        title_tv = TextView(context)
+        title_tv.setText(tab.get("title", "Tab") or "Tab")
+        title_tv.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13)
+        title_tv.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText))
+        title_tv.setSingleLine(True)
+        tlp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        tlp.leftMargin = dp(5)
+        pill.addView(title_tv, tlp)
 
-            # On click, show BottomSheet / popup of available tabs
-            btn.setClickable(True)
-            btn.setOnClickListener(OnClickListenerProxy(lambda v: self.show_tabs_selection_sheet(context, tabs)))
-            menu.addView(btn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        except Exception as e:
-            self.log(f"Error attaching popup to action bar: {e}")
-
-    def show_tabs_selection_sheet(self, context: Context, tabs: List[Dict[str, Any]]):
-        try:
-            builder = BottomSheet.Builder(context)
-            builder.setTitle(tr("Веб-вкладки", "Web Tabs"))
-
-            root = LinearLayout(context)
-            root.setOrientation(LinearLayout.VERTICAL)
-            root.setPadding(dp(16), dp(8), dp(16), dp(16))
-
-            for tab in tabs:
-                row = LinearLayout(context)
-                row.setOrientation(LinearLayout.HORIZONTAL)
-                row.setGravity(Gravity.CENTER_VERTICAL)
-                row.setPadding(dp(8), dp(10), dp(8), dp(10))
-
-                emoji_v = TextView(context)
-                emoji_v.setText(f"{tab.get('emoji', '📋')} 🌐")
-                emoji_v.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 20)
-                row.addView(emoji_v)
-
-                title_v = TextView(context)
-                title_v.setText(tab.get("title", "Tab"))
-                title_v.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16)
-                title_v.setTypeface(Typeface.DEFAULT_BOLD)
-                title_v.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText))
-                title_v.setPadding(dp(12), 0, 0, 0)
-                row.addView(title_v)
-
-                row.setClickable(True)
-                row.setOnClickListener(OnClickListenerProxy(lambda v, t=tab: [sheet.dismiss(), self.open_web_tab(context, t)]))
-                root.addView(row)
-
-            builder.setCustomView(root)
-            sheet = builder.create()
-            sheet.show()
-        except Exception as e:
-            self.log(f"Error showing tabs selection sheet: {e}")
+        pill.setClickable(True)
+        pill.setFocusable(True)
+        pill.setOnClickListener(OnClickListenerProxy(lambda v: self.open_web_tab(v, tab)))
+        return pill
 
     # =========================================================================
     # Fullscreen WebView BottomSheet
     # =========================================================================
 
-    def open_web_tab(self, context: Context, tab: Dict[str, Any]):
-        try:
-            url_target = tab.get("url", "").strip()
-            if not url_target:
-                return
-
-            if tab.get("remember_last_page") and tab.get("last_url"):
-                url_target = tab.get("last_url")
-
-            builder = BottomSheet.Builder(context, True)  # needFocus = True for keyboard input
-            builder.setApplyBottomPadding(False)
-            builder.setApplyTopPadding(False)
-
-            root = LinearLayout(context)
-            root.setOrientation(LinearLayout.VERTICAL)
-            root.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite))
-
-            # 1. Header Toolbar
-            header = LinearLayout(context)
-            header.setOrientation(LinearLayout.HORIZONTAL)
-            header.setGravity(Gravity.CENTER_VERTICAL)
-            header.setPadding(dp(16), dp(8), dp(16), dp(8))
-            header.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite))
-
-            # Emoji + Globe
-            header_emoji = TextView(context)
-            header_emoji.setText(f"{tab.get('emoji', '📋')} 🌐")
-            header_emoji.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 20)
-            header.addView(header_emoji)
-
-            # Titles layout (Title + domain)
-            titles_col = LinearLayout(context)
-            titles_col.setOrientation(LinearLayout.VERTICAL)
-            titles_col.setPadding(dp(10), 0, dp(10), 0)
-
-            header_title = TextView(context)
-            header_title.setText(tab.get("title", "Web Tab"))
-            header_title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15)
-            header_title.setTypeface(Typeface.DEFAULT_BOLD)
-            header_title.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText))
-            header_title.setSingleLine(True)
-            titles_col.addView(header_title)
-
-            parsed = urllib.parse.urlparse(url_target)
-            domain_str = parsed.netloc or parsed.path
-            header_sub = TextView(context)
-            header_sub.setText(domain_str)
-            header_sub.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 11)
-            header_sub.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText))
-            header_sub.setSingleLine(True)
-            titles_col.addView(header_sub)
-
-            header.addView(titles_col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0))
-
-            # Buttons: Back, Refresh, Open in Browser, Close
-            def btn(text_label: str, on_tap):
-                b = TextView(context)
-                b.setText(text_label)
-                b.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16)
-                b.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText))
-                b.setPadding(dp(8), dp(4), dp(8), dp(4))
-                b.setGravity(Gravity.CENTER)
-                b.setClickable(True)
-                b.setOnClickListener(OnClickListenerProxy(lambda v: on_tap()))
-                return b
-
-            # WebView placeholder handle
-            web_ref = [None]
-
-            btn_back = btn("◀", lambda: web_ref[0].goBack() if web_ref[0] and web_ref[0].canGoBack() else None)
-            btn_reload = btn("🔄", lambda: web_ref[0].reload() if web_ref[0] else None)
-            btn_external = btn("↗", lambda: self._open_external_browser(context, web_ref[0].getUrl() if web_ref[0] else url_target))
-            btn_close = btn("✕", lambda: sheet.dismiss())
-
-            header.addView(btn_back)
-            header.addView(btn_reload)
-            header.addView(btn_external)
-            header.addView(btn_close)
-
-            root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)))
-
-            # 2. Loading ProgressBar
-            progress_bar = ProgressBar(context, None, 16842872)  # progressBarStyleHorizontal
-            progress_bar.setMax(100)
-            progress_bar.setLayoutParams(LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)))
-            root.addView(progress_bar)
-
-            # 3. WebView
-            webview = WebView(context)
-            web_ref[0] = webview
-            webview.setLayoutParams(LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                int(AndroidUtilities.displaySize.y * 0.85)  # 85% of screen height
-            ))
-
-            settings = webview.getSettings()
-            settings.setJavaScriptEnabled(True)
-            settings.setDomStorageEnabled(True)
-            settings.setDatabaseEnabled(True)
-            settings.setCacheMode(WebSettings.LOAD_DEFAULT)
-            settings.setUseWideViewPort(True)
-            settings.setLoadWithOverviewMode(True)
-            settings.setSupportZoom(True)
-            settings.setBuiltInZoomControls(True)
-            settings.setDisplayZoomControls(False)
-
-            # Accept cookies & third-party cookies for seamless logins
+    def open_web_tab(self, context_or_view, tab: Dict[str, Any]):
+        def do_open():
             try:
-                cm = CookieManager.getInstance()
-                cm.setAcceptCookie(True)
-                cm.setAcceptThirdPartyCookies(webview, True)
-            except Exception:
-                pass
+                activity = get_activity_from_context(context_or_view)
+                if activity is None:
+                    LaunchActivity = jclass("org.telegram.ui.LaunchActivity")
+                    activity = LaunchActivity.instance
+                if activity is None:
+                    self.log("Cannot locate Activity to show BottomSheet")
+                    return
 
-            def on_progress(p: int):
-                progress_bar.setProgress(p)
-                if p >= 100:
-                    progress_bar.setVisibility(View.GONE)
-                else:
-                    progress_bar.setVisibility(View.VISIBLE)
+                url_target = tab.get("url", "").strip()
+                if not url_target:
+                    return
 
-            def on_page_finish(view, finished_url: str):
+                if tab.get("remember_last_page") and tab.get("last_url"):
+                    url_target = tab.get("last_url")
+
+                builder = BottomSheet.Builder(activity, True)  # needFocus = True for soft keyboard
+                builder.setApplyBottomPadding(False)
+                builder.setApplyTopPadding(False)
+
+                root = LinearLayout(activity)
+                root.setOrientation(LinearLayout.VERTICAL)
+                root.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite))
+
+                # 1. Header Toolbar (height 52dp)
+                header = LinearLayout(activity)
+                header.setOrientation(LinearLayout.HORIZONTAL)
+                header.setGravity(Gravity.CENTER_VERTICAL)
+                header.setPadding(dp(16), dp(8), dp(16), dp(8))
+                header.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite))
+
+                # Emoji Icon in header
+                header_emoji = TextView(activity)
+                header_emoji.setText(tab.get("emoji", "📋") or "📋")
+                header_emoji.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 22)
+                header.addView(header_emoji)
+
+                # Vector Globe badge next to emoji in header
+                globe_header = ImageView(activity)
+                r_drawable = jclass("org.telegram.messenger.R$drawable")
+                globe_header.setImageResource(r_drawable.msg_language)
+                globe_header.setColorFilter(Theme.getColor(Theme.key_windowBackgroundWhiteGrayIcon))
+                globe_header_lp = LinearLayout.LayoutParams(dp(15), dp(15))
+                globe_header_lp.leftMargin = dp(4)
+                header.addView(globe_header, globe_header_lp)
+
+                # Title & Subtitle (domain)
+                titles_col = LinearLayout(activity)
+                titles_col.setOrientation(LinearLayout.VERTICAL)
+                titles_col.setPadding(dp(12), 0, dp(12), 0)
+
+                header_title = TextView(activity)
+                header_title.setText(tab.get("title", "Web Tab"))
+                header_title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15)
+                header_title.setTypeface(Typeface.DEFAULT_BOLD)
+                header_title.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText))
+                header_title.setSingleLine(True)
+                titles_col.addView(header_title)
+
+                parsed = urllib.parse.urlparse(url_target)
+                domain_str = parsed.netloc or parsed.path
+                header_sub = TextView(activity)
+                header_sub.setText(domain_str)
+                header_sub.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 11)
+                header_sub.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText))
+                header_sub.setSingleLine(True)
+                titles_col.addView(header_sub)
+
+                header.addView(titles_col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0))
+
+                # Native SVG Vector Buttons: Back, Refresh, Open in Browser, Close
+                sheet_ref = [None]
+                icon_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlackText)
+
+                def icon_btn(drawable_id: int, on_tap, pad: int = 6):
+                    b = ImageView(activity)
+                    b.setImageResource(drawable_id)
+                    b.setColorFilter(icon_color)
+                    b.setScaleType(ImageView.ScaleType.CENTER_INSIDE)
+                    b.setPadding(dp(pad), dp(pad), dp(pad), dp(pad))
+                    b_lp = LinearLayout.LayoutParams(dp(36), dp(36))
+                    b_lp.gravity = Gravity.CENTER_VERTICAL
+                    b_lp.leftMargin = dp(2)
+                    b.setLayoutParams(b_lp)
+                    try:
+                        b.setBackground(Theme.createSelectorDrawable(Theme.getColor(Theme.key_listSelector), 1))
+                    except Exception:
+                        pass
+                    b.setClickable(True)
+                    b.setFocusable(True)
+                    b.setOnClickListener(OnClickListenerProxy(lambda v: on_tap()))
+                    return b
+
+                web_ref = [None]
+                btn_back = icon_btn(r_drawable.ic_ab_back, lambda: web_ref[0].goBack() if web_ref[0] and web_ref[0].canGoBack() else None, pad=5)
+                btn_reload = icon_btn(r_drawable.msg_retry, lambda: web_ref[0].reload() if web_ref[0] else None, pad=5)
+                btn_external = icon_btn(r_drawable.filled_link, lambda: self._open_external_browser(activity, web_ref[0].getUrl() if web_ref[0] else url_target), pad=4)
+                btn_close = icon_btn(r_drawable.ic_ab_close, lambda: sheet_ref[0].dismiss() if sheet_ref[0] else None, pad=2)
+
+                header.addView(btn_back)
+                header.addView(btn_reload)
+                header.addView(btn_external)
+                header.addView(btn_close)
+
+                root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)))
+
+                # 2. Loading ProgressBar
+                progress_bar = ProgressBar(activity, None, 16842872)
+                progress_bar.setMax(100)
+                progress_bar.setLayoutParams(LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)))
+                root.addView(progress_bar)
+
+                # 3. WebView
+                webview = WebView(activity)
+                web_ref[0] = webview
+                webview.setLayoutParams(LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    int(AndroidUtilities.displaySize.y * 0.85)
+                ))
+
+                settings = webview.getSettings()
+                settings.setJavaScriptEnabled(True)
+                settings.setDomStorageEnabled(True)
+                settings.setDatabaseEnabled(True)
+                settings.setCacheMode(WebSettings.LOAD_DEFAULT)
+                settings.setUseWideViewPort(True)
+                settings.setLoadWithOverviewMode(True)
+                settings.setSupportZoom(True)
+                settings.setBuiltInZoomControls(True)
+                settings.setDisplayZoomControls(False)
+
                 try:
-                    if finished_url:
-                        # Update domain in header
-                        p = urllib.parse.urlparse(finished_url)
-                        header_sub.setText(p.netloc or p.path)
-
-                        # Remember last page if configured
-                        if tab.get("remember_last_page"):
-                            tab["last_url"] = finished_url
-                            self.save_config(reload_ui=False)
+                    cm = CookieManager.getInstance()
+                    cm.setAcceptCookie(True)
+                    cm.setAcceptThirdPartyCookies(webview, True)
                 except Exception:
                     pass
 
-            chrome_inst = CustomChromeClient.new_instance()
-            chrome_inst.on_progress = on_progress
-            webview.setWebChromeClient(chrome_inst.java)
+                def on_progress(p: int):
+                    progress_bar.setProgress(p)
+                    if p >= 100:
+                        progress_bar.setVisibility(View.GONE)
+                    else:
+                        progress_bar.setVisibility(View.VISIBLE)
 
-            web_inst = CustomWebClient.new_instance()
-            web_inst.on_finish = on_page_finish
-            webview.setWebViewClient(web_inst.java)
+                def on_page_finish(view, finished_url: str):
+                    try:
+                        if finished_url:
+                            p = urllib.parse.urlparse(finished_url)
+                            header_sub.setText(p.netloc or p.path)
+                            if tab.get("remember_last_page"):
+                                tab["last_url"] = finished_url
+                                self.save_config(reload_ui=False)
+                    except Exception:
+                        pass
 
-            # Load the target URL
-            webview.loadUrl(url_target)
-            root.addView(webview)
+                chrome_inst = CustomChromeClient.new_instance()
+                chrome_inst.on_progress = on_progress
+                webview.setWebChromeClient(chrome_inst.java)
 
-            builder.setCustomView(root)
-            sheet = builder.create()
+                web_inst = CustomWebClient.new_instance()
+                web_inst.on_finish = on_page_finish
+                webview.setWebViewClient(web_inst.java)
 
-            # Clean up WebView on dismiss to prevent memory leaks
-            def on_dismiss():
-                try:
-                    webview.stopLoading()
-                    webview.destroy()
-                except Exception:
-                    pass
+                webview.loadUrl(url_target)
+                root.addView(webview)
 
-            sheet.setOnDismissListener(dynamic_proxy(jclass("android.content.DialogInterface$OnDismissListener"))(
-                bare(lambda d: on_dismiss())
-            ))
-            sheet.show()
-        except Exception as e:
-            self.log(f"Error opening web tab: {e}")
+                builder.setCustomView(root)
+                sheet = builder.create()
+                sheet_ref[0] = sheet
+
+                def on_dismiss():
+                    try:
+                        webview.stopLoading()
+                        webview.destroy()
+                    except Exception:
+                        pass
+
+                sheet.setOnDismissListener(OnDismissListenerProxy(on_dismiss))
+                sheet.show()
+            except Exception as e:
+                self.log(f"Error opening web tab: {e}")
+
+        run_on_ui_thread(do_open)
 
     def _open_external_browser(self, context: Context, url_str: str):
         try:
@@ -694,40 +713,62 @@ class ChatWebTabsPlugin(BasePlugin):
             self.log(f"Error opening external browser: {e}")
 
     # =========================================================================
-    # Settings Screen (Dynamic configuration)
+    # Emoji Picker Dialog Integration
+    # =========================================================================
+
+    def open_emoji_picker(self, view, g_idx: int, t_idx: int):
+        try:
+            LaunchActivity = jclass("org.telegram.ui.LaunchActivity")
+            la = LaunchActivity.instance
+            activity = la or get_activity_from_context(view)
+            frag = la.getLastFragment() if la else None
+
+            picker = MyEmojiPicker.new_instance(frag, activity, False, None, jint(0), None)
+
+            builder = BottomSheet.Builder(activity)
+            builder.setCustomView(picker.java)
+            sheet = builder.create()
+
+            def on_selected(v, doc_id, doc, star_gift, until):
+                try:
+                    emoji_str = "📋"
+                    if doc is not None:
+                        emoticon = MessageObject.findAnimatedEmojiEmoticon(doc)
+                        if emoticon:
+                            emoji_str = str(emoticon)
+                    elif doc_id is not None:
+                        emoji_str = str(doc_id)
+                    self.update_tab(g_idx, t_idx, "emoji", emoji_str)
+                    self.save_config(reload_ui=True)
+                except Exception as e:
+                    self.log(f"Error setting picked emoji: {e}")
+                finally:
+                    sheet.dismiss()
+
+            picker.on_selected_callback = on_selected
+            sheet.show()
+        except Exception as e:
+            self.log(f"Error opening emoji picker: {e}")
+
+    # =========================================================================
+    # Settings Screen
     # =========================================================================
 
     def create_settings(self) -> List[Any]:
         settings_rows: List[Any] = []
 
-        # 1. Global Display Mode
-        settings_rows.append(Header(tr("Отображение в чатах", "Chat Display Mode")))
-        settings_rows.append(
-            Selector(
-                key="global_display_mode",
-                text=tr("Режим отображения", "Display format"),
-                default=self._global_display_mode,
-                items=[
-                    tr("Полоса вкладок под шапкой (как топики)", "Tab strip under ActionBar (like topics)"),
-                    tr("Кнопки в шапке (ActionBar)", "Buttons in ActionBar"),
-                    tr("Единая кнопка с выпадающим меню", "Single button with popup menu"),
-                ],
-                icon="msg_theme",
-                on_change=lambda val: self._on_display_mode_change(val),
-            )
-        )
+        settings_rows.append(Header(tr("Отображение", "Display")))
         settings_rows.append(
             Switch(
                 key="show_globe_badge",
-                text=tr("Значок 🌐 на иконках", "Show 🌐 globe badge on icons"),
-                subtext=tr("Отличает веб-вкладки от обычных тем чата", "Distinguishes web tabs from regular forum topics"),
+                text=tr("Значок глобуса на иконках", "Globe badge on icons"),
+                subtext=tr("Векторный индикатор, отличающий веб-вкладки от обычных тем", "Vector icon indicator distinguishing web tabs from regular topics"),
                 default=self._show_globe_badge,
-                icon="msg_channel",
+                icon="msg_language",
                 on_change=lambda val: self._on_globe_badge_change(val),
             )
         )
 
-        # 2. Configured Groups & Tabs
         for g_idx, group in enumerate(self._groups):
             g_title = group.get("title", "") or group.get("chat_id", "")
             settings_rows.append(Header(tr(f"Группа #{g_idx + 1}: {g_title}", f"Group #{g_idx + 1}: {g_title}")))
@@ -758,13 +799,24 @@ class ChatWebTabsPlugin(BasePlugin):
                     )
                 )
 
+                # Tap to open Telegram's Native Emoji Picker Dialog
+                settings_rows.append(
+                    Text(
+                        text=tr(f"Выбрать эмодзи в пикере: {tab.get('emoji', '📋')}", f"Pick emoji from picker: {tab.get('emoji', '📋')}"),
+                        subtext=tr("Нажмите, чтобы открыть пикер эмодзи Telegram", "Tap to open native Telegram emoji picker"),
+                        icon="msg_smile",
+                        accent=True,
+                        on_click=lambda view, g=g_idx, t=t_idx: self.open_emoji_picker(view, g, t),
+                    )
+                )
+
+                # Or manual input
                 settings_rows.append(
                     Input(
                         key=f"t_{g_idx}_{t_idx}_emoji",
-                        text=tr("Эмодзи", "Emoji"),
+                        text=tr("Или введите символ вручную", "Or enter symbol manually"),
                         default=str(tab.get("emoji", "📋")),
-                        subtext=tr("Символ эмодзи для иконки (например: 📋, 📚, 📊)", "Emoji character for icon (e.g.: 📋, 📚, 📊)"),
-                        icon="msg_smile",
+                        icon="msg_edit",
                         on_change=lambda val, g=g_idx, t=t_idx: self.update_tab(g, t, "emoji", val),
                     )
                 )
@@ -832,10 +884,6 @@ class ChatWebTabsPlugin(BasePlugin):
 
         return settings_rows
 
-    def _on_display_mode_change(self, val: int):
-        self._global_display_mode = int(val)
-        self.set_setting("global_display_mode", self._global_display_mode)
-
     def _on_globe_badge_change(self, val: bool):
         self._show_globe_badge = bool(val)
         self.set_setting("show_globe_badge", self._show_globe_badge)
@@ -859,7 +907,7 @@ class ChatWebTabsPlugin(BasePlugin):
             tabs.append({
                 "id": f"tab_{new_idx}",
                 "title": f"Web App {new_idx}",
-                "emoji": "🌐",
+                "emoji": "📋",
                 "url": "https://",
                 "remember_last_page": True,
                 "last_url": "",
@@ -895,14 +943,3 @@ class ChatWebTabsPlugin(BasePlugin):
         if 0 <= g_idx < len(self._groups) and len(self._groups) > 1:
             self._groups.pop(g_idx)
             self.save_config(reload_ui=True)
-
-
-def bare(func, scope=None):
-    import types
-    return types.FunctionType(
-        func.__code__,
-        scope or {},
-        func.__name__,
-        func.__defaults__,
-        func.__closure__,
-    )
