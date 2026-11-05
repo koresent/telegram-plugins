@@ -1,0 +1,53 @@
+# Chat Web Tabs
+
+Custom web apps and pinned web tabs with persistent sessions for [exteraGram](https://github.com/exteraSquad/exteraGram) and compatible Telegram Android clients.
+
+Embed web services (Vikunja, Notion, Jira, Linear, Grafana, GitHub, custom dashboards) directly into your Telegram groups and forum topics.
+
+---
+
+## Features
+
+- **Topic Tile Design**: Web tabs are styled like native Telegram forum topics (custom emoji + title card) with an optional mini `🌐` globe badge indicator.
+- **Multiple Display Modes**:
+  - **Tab Strip Under ActionBar**: Horizontal scrolling row of topic-like tiles positioned directly beneath the top bar.
+  - **Buttons in ActionBar**: Compact emoji action buttons integrated right into the top navigation bar.
+  - **Single Popup Menu**: A single `🌐` globe button in the top bar opening a dropdown list of all configured web apps.
+- **Persistent Sessions & Logins**: Full support for `CookieManager` and `DOM Storage` (`localStorage`/`sessionStorage`). Log in once to your self-hosted or cloud service and stay logged in.
+- **Smart Page Resume (`remember_last_page`)**: Automatically tracks in-page navigation and reopens the exact task, board, or document you last visited instead of resetting to the base URL.
+- **Full-featured Web Container**:
+  - High-performance `BottomSheet` dialog opening directly inside the chat.
+  - Toolbar with web app title, active domain, Back (`◀`), Refresh (`🔄`), Open in Browser (`↗`), and Close (`✕`).
+  - Animated horizontal progress bar.
+  - Keyboard-friendly with proper soft input resizing for editing tasks and forms.
+- **Dynamic Settings UI**: Add unlimited chat groups and unlimited web tabs per group dynamically from the plugin settings page.
+
+---
+
+## Configuration
+
+| Setting | Options / Description |
+|---|---|
+| **Display format** | *Tab strip under ActionBar*, *Buttons in ActionBar*, *Single button with popup menu* |
+| **Show 🌐 globe badge** | Displays a subtle globe overlay to distinguish web tabs from native chat topics. |
+| **Chat / Group ID** | Target chat ID (e.g. `-1002482353775` or `2482353775`). Matches both full and normalized formats. |
+| **Tab Title** | Display name shown on the tab tile or menu (e.g. `Vikunja`, `Tasks`, `Dashboard`). |
+| **Emoji** | Emoji icon displayed on the tile or action button (e.g. `📋`, `📚`, `📊`). |
+| **URL Address** | Full URL of the web service (e.g. `https://vikunja.example.com`). |
+| **Remember last page** | Toggle to resume on the last navigated URL upon reopening. |
+
+---
+
+## Installation
+
+1. Download [`chat_web_tabs.plugin`](chat_web_tabs.plugin).
+2. Open the file in **exteraGram** or send it to your Saved Messages and tap to install.
+3. Open **Settings** > **Plugins** and enable **Chat Web Tabs**.
+4. Configure your group ID and target web applications.
+
+---
+
+## Compatibility
+
+- **Client**: exteraGram, AyuGram Android, or any client with the Python Plugins Engine.
+- **Android**: Android 7.0+ (Nougat) through Android 15+.
