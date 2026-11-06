@@ -50,7 +50,7 @@ __id__ = "chat_web_tabs"
 __name__ = "Chat Web Tabs"
 __description__ = "Custom web apps and pinned web tabs with persistent sessions for Telegram chats"
 __author__ = "@koresent"
-__version__ = "1.0.5"
+__version__ = "1.0.6"
 __icon__ = "exteraPlugins/1"
 __category__ = "general"
 
@@ -63,6 +63,7 @@ DEFAULT_CONFIG = [
                 "id": "tab_1",
                 "title": "",
                 "emoji": "📋",
+                "custom_emoji_id": 0,
                 "url": "",
                 "remember_last_page": False,
                 "last_url": "",
@@ -85,6 +86,29 @@ def tr(ru_text: str, en_text: str) -> str:
 
 def dp(value: float) -> int:
     return int(AndroidUtilities.dp(value))
+
+
+def extract_domain(url_str: str) -> str:
+    s = str(url_str or "").strip()
+    if not s:
+        return ""
+    if not (s.startswith("http://") or s.startswith("https://")):
+        s = "https://" + s
+    try:
+        p = urllib.parse.urlparse(s)
+        netloc = (p.netloc or "").split(":")[0].lower()
+        return netloc
+    except Exception:
+        return ""
+
+
+def is_remember_enabled(tab: Dict[str, Any]) -> bool:
+    val = tab.get("remember_last_page", False)
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() in ("true", "1", "yes")
+    return bool(val)
 
 
 def normalize_chat_id(val: Any) -> str:
@@ -166,6 +190,15 @@ class CustomWebClient(Base):
     def on_page_finished(self, view, url):
         try:
             cb = getattr(self, "on_finish", None)
+            if cb:
+                cb(view, str(url) if url else "")
+        except Exception:
+            pass
+
+    @joverload("doUpdateVisitedHistory", ["android.webkit.WebView", "java.lang.String", "boolean"])
+    def do_update_visited_history(self, view, url, is_reload):
+        try:
+            cb = getattr(self, "on_url_change", None)
             if cb:
                 cb(view, str(url) if url else "")
         except Exception:
@@ -385,6 +418,37 @@ class ChatWebTabsPlugin(BasePlugin):
     # Sidebar Tile View (Inserted into left Topics panel)
     # =========================================================================
 
+    def create_tab_icon_view(self, context: Context, tab: Dict[str, Any], size_dp: int) -> View:
+        custom_id = tab.get("custom_emoji_id", 0)
+        if not custom_id:
+            e_str = str(tab.get("emoji", "")).strip()
+            if e_str.isdigit():
+                try:
+                    custom_id = int(e_str)
+                except Exception:
+                    pass
+
+        if custom_id:
+            try:
+                BackupImageView = jclass("org.telegram.ui.Components.BackupImageView")
+                AnimatedEmojiDrawable = jclass("org.telegram.ui.Components.AnimatedEmojiDrawable")
+                UserConfig = jclass("org.telegram.messenger.UserConfig")
+                from java import jlong
+
+                biv = BackupImageView(context)
+                biv.setLayoutParams(FrameLayout.LayoutParams(dp(size_dp), dp(size_dp), Gravity.CENTER))
+                drawable = AnimatedEmojiDrawable.make(UserConfig.selectedAccount, 13, jlong(custom_id))
+                biv.setAnimatedEmojiDrawable(drawable)
+                return biv
+            except Exception as e:
+                self.log(f"Error creating animated emoji drawable: {e}")
+
+        tv = TextView(context)
+        tv.setText(tab.get("emoji", "📋") or "📋")
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_DIP, int(size_dp * 0.72))
+        tv.setGravity(Gravity.CENTER)
+        return tv
+
     def create_sidebar_tile_view(self, context: Context, tab: Dict[str, Any]) -> View:
         tile = LinearLayout(context)
         tile.setOrientation(LinearLayout.VERTICAL)
@@ -400,12 +464,9 @@ class ChatWebTabsPlugin(BasePlugin):
         icon_box_lp.gravity = Gravity.CENTER_HORIZONTAL
         icon_box.setLayoutParams(icon_box_lp)
 
-        # Centered Emoji (clean, no artificial box background, matching topic items)
-        emoji_view = TextView(context)
-        emoji_view.setText(tab.get("emoji", "📋") or "📋")
-        emoji_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 24)
-        emoji_view.setGravity(Gravity.CENTER)
-        icon_box.addView(emoji_view, FrameLayout.LayoutParams(
+        # Centered Emoji (handles both standard unicode and custom animated emojis)
+        icon_view = self.create_tab_icon_view(context, tab, 26)
+        icon_box.addView(icon_view, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT,
             Gravity.CENTER
@@ -465,10 +526,8 @@ class ChatWebTabsPlugin(BasePlugin):
         bg.setColor(Theme.getColor(Theme.key_chat_inBubble))
         pill.setBackground(bg)
 
-        emoji_tv = TextView(context)
-        emoji_tv.setText(tab.get("emoji", "📋") or "📋")
-        emoji_tv.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14)
-        pill.addView(emoji_tv)
+        icon_view = self.create_tab_icon_view(context, tab, 18)
+        pill.addView(icon_view)
 
         if self._show_globe_badge:
             globe = ImageView(context)
@@ -508,20 +567,20 @@ class ChatWebTabsPlugin(BasePlugin):
                     self.log("Cannot locate Activity to show BottomSheet")
                     return
 
-                base_url = tab.get("url", "").strip()
+                base_url = str(tab.get("url", "")).strip()
                 if not base_url:
                     return
 
-                base_parsed = urllib.parse.urlparse(base_url)
-                base_domain = (base_parsed.netloc or "").lower()
+                base_domain = extract_domain(base_url)
 
                 url_target = base_url
-                if tab.get("remember_last_page", False):
+                if is_remember_enabled(tab):
                     saved_url = str(tab.get("last_url", "")).strip()
-                    if saved_url.startswith("http://") or saved_url.startswith("https://"):
-                        saved_domain = (urllib.parse.urlparse(saved_url).netloc or "").lower()
-                        if saved_domain == base_domain:
+                    if saved_url:
+                        if extract_domain(saved_url) == base_domain:
                             url_target = saved_url
+
+                self.log(f"Opening tab '{tab.get('title')}': target='{url_target}' (remember={is_remember_enabled(tab)}, last='{tab.get('last_url')}')")
 
                 builder = BottomSheet.Builder(activity, True)  # needFocus = True for soft keyboard
                 builder.setApplyBottomPadding(False)
@@ -538,10 +597,8 @@ class ChatWebTabsPlugin(BasePlugin):
                 header.setPadding(dp(16), dp(8), dp(16), dp(8))
                 header.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite))
 
-                # Emoji Icon in header
-                header_emoji = TextView(activity)
-                header_emoji.setText(tab.get("emoji", "📋") or "📋")
-                header_emoji.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 22)
+                # Emoji Icon in header (standard or animated)
+                header_emoji = self.create_tab_icon_view(activity, tab, 24)
                 header.addView(header_emoji)
 
                 # Title & Subtitle (domain)
@@ -644,16 +701,15 @@ class ChatWebTabsPlugin(BasePlugin):
                     else:
                         progress_bar.setVisibility(View.VISIBLE)
 
-                def on_page_finish(view, finished_url: str):
+                def handle_url_change(view, new_url: str):
                     try:
-                        if finished_url:
-                            p = urllib.parse.urlparse(finished_url)
+                        if new_url:
+                            f_str = str(new_url).strip()
+                            p = urllib.parse.urlparse(f_str)
                             header_sub.setText(p.netloc or p.path)
-                            if tab.get("remember_last_page", False):
-                                f_str = str(finished_url).strip()
+                            if is_remember_enabled(tab):
                                 if f_str.startswith("http://") or f_str.startswith("https://"):
-                                    f_domain = (urllib.parse.urlparse(f_str).netloc or "").lower()
-                                    if f_domain == base_domain:
+                                    if extract_domain(f_str) == base_domain:
                                         tab["last_url"] = f_str
                                         self.save_config(reload_ui=False)
                     except Exception:
@@ -664,7 +720,8 @@ class ChatWebTabsPlugin(BasePlugin):
                 webview.setWebChromeClient(chrome_inst.java)
 
                 web_inst = CustomWebClient.new_instance()
-                web_inst.on_finish = on_page_finish
+                web_inst.on_finish = handle_url_change
+                web_inst.on_url_change = handle_url_change
                 webview.setWebViewClient(web_inst.java)
 
                 webview.loadUrl(url_target)
@@ -676,11 +733,10 @@ class ChatWebTabsPlugin(BasePlugin):
 
                 def on_dismiss():
                     try:
-                        if tab.get("remember_last_page", False) and web_ref[0]:
+                        if is_remember_enabled(tab) and web_ref[0]:
                             curr_url = str(web_ref[0].getUrl() or "").strip()
                             if curr_url.startswith("http://") or curr_url.startswith("https://"):
-                                curr_domain = (urllib.parse.urlparse(curr_url).netloc or "").lower()
-                                if curr_domain == base_domain:
+                                if extract_domain(curr_url) == base_domain:
                                     tab["last_url"] = curr_url
                                     self.save_config(reload_ui=False)
                         if web_ref[0]:
@@ -737,6 +793,7 @@ class ChatWebTabsPlugin(BasePlugin):
                 def onEmojiSelected(self, emoji_str):
                     try:
                         self.plugin.update_tab(self.g, self.t, "emoji", str(emoji_str))
+                        self.plugin.update_tab(self.g, self.t, "custom_emoji_id", 0)
                         self.plugin.save_config(reload_ui=True)
                     except Exception as e:
                         self.plugin.log(f"Error picking emoji: {e}")
@@ -746,16 +803,22 @@ class ChatWebTabsPlugin(BasePlugin):
 
                 def onCustomEmojiSelected(self, doc_id, doc, s, z):
                     try:
-                        emoji_str = "📋"
+                        chosen_id = 0
+                        if doc_id is not None:
+                            chosen_id = int(doc_id)
+                        elif doc is not None:
+                            chosen_id = int(doc.id)
+
+                        emoji_char = "✨"
                         if s:
-                            emoji_str = str(s)
+                            emoji_char = str(s)
                         elif doc is not None:
                             emoticon = MessageObject.findAnimatedEmojiEmoticon(doc)
                             if emoticon:
-                                emoji_str = str(emoticon)
-                        elif doc_id is not None:
-                            emoji_str = str(doc_id)
-                        self.plugin.update_tab(self.g, self.t, "emoji", emoji_str)
+                                emoji_char = str(emoticon)
+
+                        self.plugin.update_tab(self.g, self.t, "custom_emoji_id", chosen_id)
+                        self.plugin.update_tab(self.g, self.t, "emoji", emoji_char)
                         self.plugin.save_config(reload_ui=True)
                     except Exception as e:
                         self.plugin.log(f"Error picking custom emoji: {e}")
@@ -840,24 +903,17 @@ class ChatWebTabsPlugin(BasePlugin):
                 )
 
                 # Tap to open Telegram's Native Emoji Picker Dialog
+                emoji_label = tab.get("emoji", "📋") or "📋"
+                if tab.get("custom_emoji_id"):
+                    emoji_label = f"✨ [{emoji_label}]"
+
                 settings_rows.append(
                     Text(
-                        text=tr(f"Выбрать эмодзи в пикере: {tab.get('emoji', '📋')}", f"Pick emoji from picker: {tab.get('emoji', '📋')}"),
+                        text=tr(f"Эмодзи вкладки: {emoji_label}", f"Tab emoji: {emoji_label}"),
                         subtext=tr("Нажмите, чтобы открыть пикер эмодзи Telegram", "Tap to open native Telegram emoji picker"),
                         icon="msg_smile",
                         accent=True,
                         on_click=lambda view, g=g_idx, t=t_idx: self.open_emoji_picker(view, g, t),
-                    )
-                )
-
-                # Or manual input
-                settings_rows.append(
-                    Input(
-                        key=f"t_{g_idx}_{t_idx}_emoji",
-                        text=tr("Или введите символ вручную", "Or enter symbol manually"),
-                        default=str(tab.get("emoji", "📋")),
-                        icon="msg_edit",
-                        on_change=lambda val, g=g_idx, t=t_idx: self.update_tab(g, t, "emoji", val),
                     )
                 )
 
@@ -967,6 +1023,7 @@ class ChatWebTabsPlugin(BasePlugin):
                 "id": f"tab_{new_idx}",
                 "title": "",
                 "emoji": "📋",
+                "custom_emoji_id": 0,
                 "url": "",
                 "remember_last_page": False,
                 "last_url": "",
@@ -990,6 +1047,7 @@ class ChatWebTabsPlugin(BasePlugin):
                     "id": "tab_1",
                     "title": "",
                     "emoji": "📋",
+                    "custom_emoji_id": 0,
                     "url": "",
                     "remember_last_page": False,
                     "last_url": "",
