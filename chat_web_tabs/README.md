@@ -10,11 +10,11 @@ Embed web services (Vikunja, Notion, Jira, Linear, Grafana, GitHub, custom dashb
 
 - **Seamless Topic Integration**: Custom web tabs are placed directly inside Telegram's existing vertical topics sidebar (and top horizontal pills), positioned neatly at the bottom right before "+ New Topic".
 - **Native Telegram Styling**: Clean topic typography, theme colors, and selector ripples that look and feel 100% native.
-- **Native Emoji Picker**: Supports selecting standard and animated Telegram custom emojis directly via the native emoji picker dialog in plugin settings.
-- **Vector SVG Toolbar Controls**: Clean vector icons (`ic_ab_back`, `msg_retry`, `filled_link`, `ic_ab_close`) tinted to the active theme.
+- **Native Emoji Keyboard**: Opens Telegram's full native emoji picker (`EmojiView`) with category tabs, search, recent emojis, and all installed custom animated emoji packs.
+- **Vector SVG Toolbar Controls**: Clean vector icons (`ic_ab_back`, `msg_retry`, `filled_link`, `ic_ab_close`) tinted to the active theme, without clunky header badges.
 - **Persistent Sessions & Logins**: Full support for `CookieManager` and `DOM Storage` (`localStorage`/`sessionStorage`). Log in once to your self-hosted or cloud service (e.g. Vikunja, Kanban) and stay logged in.
-- **Smart Page Resume (`remember_last_page`)**: Automatically tracks in-page navigation and reopens the exact task, board, or document you last visited instead of resetting to the base URL.
-- **Full-featured Web Container**:
+- **Smart & Safe Page Resume**: Remembers the exact SPA board or task visited on dismissal, strictly validates against the base domain to prevent unexpected external redirects, and offers a 1-tap "Reset saved page" button in settings.
+- **Clean Configuration**: Empty defaults out-of-the-box (no pre-filled user IDs), custom group title editing, and dynamic addition/removal of groups and tabs.
   - High-performance `BottomSheet` dialog opening directly inside the chat.
   - Toolbar with web app title, active domain, Back, Refresh, Open in Browser, and Close controls.
   - Animated horizontal progress bar.
