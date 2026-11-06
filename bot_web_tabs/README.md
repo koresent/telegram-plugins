@@ -9,15 +9,15 @@ Add a native WebApp button to any Telegram bot by its ID or username, even if th
 ## Features
 
 - **Native Bot Menu Button**: Injects Telegram's native input bar menu button (`BotCommandsMenuView`) with the official animated webview icon and custom button text (e.g. "Open App").
-- **Flexible Bot Targeting**: Configure bots by numeric Bot ID (e.g. `772433176`) or username (e.g. `@newreleasesiobot`).
-- **Persistent Sessions & Logins**: Full support for `CookieManager` and `DOM Storage` (`localStorage`/`sessionStorage`). Log in once to any web app or service and stay logged in across app restarts.
-- **Smart & Safe Page Resume**: Remembers the exact page or dashboard visited when closing the web view. Includes domain isolation to prevent getting stuck on external auth redirects, plus a 1-tap "Reset saved page" button in settings.
-- **Native Bottom Sheet**:
-  - High-performance, gesture-friendly `BottomSheet` opening directly inside the chat.
-  - Header toolbar with bot name, active domain subtitle, and native vector action buttons: **Back**, **Reload**, **Open in External Browser**, and **Close**.
+- **Bot Targeting**: Configure bots by numeric Bot ID (e.g. `772433176`) or username (e.g. `@newreleasesiobot`).
+- **Persistent Sessions**: Support for `CookieManager` and `DOM Storage` (`localStorage`/`sessionStorage`) to preserve logins across restarts.
+- **Page Resume**: Remembers the last visited page on that domain upon reopening, with domain validation to avoid external redirects and a reset button in settings.
+- **In-App Browser Bottom Sheet**:
+  - Opens directly inside the chat with swipe-dismiss disabled during page scroll.
+  - Header toolbar with bot name, active domain subtitle, and action buttons: **Back**, **Reload**, **Open in External Browser**, and **Close**.
   - Integrated loading progress bar.
-  - Full soft keyboard support for text inputs and forms.
-- **Dynamic Multi-Bot Configuration**: Add and configure as many bots as you need directly from the plugin settings.
+  - Soft keyboard support for text inputs and forms.
+- **Multi-Bot Configuration**: Add and configure multiple bots directly from the plugin settings.
 
 ---
 

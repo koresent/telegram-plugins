@@ -407,7 +407,6 @@ class ChatWebTabsPlugin(BasePlugin):
         arr_cls = Class_cls.forName("java.util.ArrayList")
         adp_cls = Class_cls.forName("org.telegram.ui.Components.UniversalAdapter")
 
-        # 1. Hook fillVerticalTabs(ArrayList, UniversalAdapter) for the left side panel
         try:
             m_vertical = ttv_cls.getDeclaredMethod("fillVerticalTabs", arr_cls, adp_cls)
             m_vertical.setAccessible(True)
@@ -418,7 +417,6 @@ class ChatWebTabsPlugin(BasePlugin):
         except Exception as e:
             self.log(f"Error hooking fillVerticalTabs: {e}")
 
-        # 2. Hook fillHorizontalTabs(ArrayList, UniversalAdapter) for top horizontal mode
         try:
             m_horizontal = ttv_cls.getDeclaredMethod("fillHorizontalTabs", arr_cls, adp_cls)
             m_horizontal.setAccessible(True)
@@ -502,10 +500,6 @@ class ChatWebTabsPlugin(BasePlugin):
         self.set_setting(f"last_url_{tab_id}", cleaned)
         self.save_config(reload_ui=False)
         self.file_log(f"Saved last_url for tab {tab_id}: {cleaned}")
-
-    # =========================================================================
-    # Sidebar Tile View (Inserted into left Topics panel)
-    # =========================================================================
 
     def create_tab_icon_view(self, context: Context, tab: Dict[str, Any], size_dp: int) -> View:
         custom_id = tab.get("custom_emoji_id", 0)
@@ -619,17 +613,13 @@ class ChatWebTabsPlugin(BasePlugin):
         tile.setOrientation(LinearLayout.VERTICAL)
         tile.setGravity(Gravity.CENTER_HORIZONTAL)
         tile.setPadding(dp(2), dp(6), dp(2), dp(4))
-
-        # Size matching vertical topic tiles in left sidebar
         tile.setLayoutParams(ViewGroup.LayoutParams(dp(56), dp(62)))
 
-        # Icon container (matching native topic tab icon in vertical topics bar)
         icon_box = FrameLayout(context)
         icon_box_lp = LinearLayout.LayoutParams(dp(32), dp(32))
         icon_box_lp.gravity = Gravity.CENTER_HORIZONTAL
         icon_box.setLayoutParams(icon_box_lp)
 
-        # Centered Emoji (handles both standard unicode and custom animated emojis)
         icon_view = self.create_tab_icon_view(context, tab, 26)
         icon_box.addView(icon_view, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -637,7 +627,6 @@ class ChatWebTabsPlugin(BasePlugin):
             Gravity.CENTER
         ))
 
-        # Vector Globe badge (SVG / Vector Drawable from Telegram tinted to theme)
         if self._show_globe_badge:
             globe_iv = ImageView(context)
             r_drawable = jclass("org.telegram.messenger.R$drawable")
@@ -648,7 +637,6 @@ class ChatWebTabsPlugin(BasePlugin):
 
         tile.addView(icon_box)
 
-        # Label underneath (matching "Бэкап" and "Заметки" styling in Topics bar)
         title_view = TextView(context)
         title_view.setText(tab.get("title", "Tab") or "Tab")
         title_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 10.5)
@@ -662,7 +650,6 @@ class ChatWebTabsPlugin(BasePlugin):
         title_lp.gravity = Gravity.CENTER_HORIZONTAL
         tile.addView(title_view, title_lp)
 
-        # Native selector ripple
         try:
             selector = Theme.createSelectorDrawable(Theme.getColor(Theme.key_listSelector), 2)
             tile.setBackground(selector)
@@ -674,10 +661,6 @@ class ChatWebTabsPlugin(BasePlugin):
         tile.setOnClickListener(OnClickListenerProxy(lambda v: self.open_web_tab(v, tab)))
 
         return tile
-
-    # =========================================================================
-    # Horizontal Tab View (Pill for top topics bar)
-    # =========================================================================
 
     def create_horizontal_tab_view(self, context: Context, tab: Dict[str, Any]) -> View:
         pill = LinearLayout(context)
@@ -716,10 +699,6 @@ class ChatWebTabsPlugin(BasePlugin):
         pill.setFocusable(True)
         pill.setOnClickListener(OnClickListenerProxy(lambda v: self.open_web_tab(v, tab)))
         return pill
-
-    # =========================================================================
-    # Fullscreen WebView BottomSheet
-    # =========================================================================
 
     def open_web_tab(self, context_or_view, tab: Dict[str, Any]):
         def do_open():
@@ -765,18 +744,15 @@ class ChatWebTabsPlugin(BasePlugin):
                 root.setOrientation(LinearLayout.VERTICAL)
                 root.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite))
 
-                # 1. Header Toolbar (height 52dp)
                 header = LinearLayout(activity)
                 header.setOrientation(LinearLayout.HORIZONTAL)
                 header.setGravity(Gravity.CENTER_VERTICAL)
                 header.setPadding(dp(16), dp(8), dp(16), dp(8))
                 header.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite))
 
-                # Emoji Icon in header (standard or animated)
                 header_emoji = self.create_tab_icon_view(activity, live_tab, 24)
                 header.addView(header_emoji)
 
-                # Title & Subtitle (domain)
                 titles_col = LinearLayout(activity)
                 titles_col.setOrientation(LinearLayout.VERTICAL)
                 titles_col.setPadding(dp(12), 0, dp(12), 0)
@@ -800,7 +776,6 @@ class ChatWebTabsPlugin(BasePlugin):
 
                 header.addView(titles_col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0))
 
-                # Native SVG Vector Buttons: Back, Refresh, Open in Browser, Close
                 sheet_ref = [None]
                 icon_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlackText)
                 r_drawable = jclass("org.telegram.messenger.R$drawable")
@@ -837,13 +812,11 @@ class ChatWebTabsPlugin(BasePlugin):
 
                 root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)))
 
-                # 2. Loading ProgressBar
                 progress_bar = ProgressBar(activity, None, 16842872)
                 progress_bar.setMax(100)
                 progress_bar.setLayoutParams(LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)))
                 root.addView(progress_bar)
 
-                # 3. WebView
                 webview = WebView(activity)
                 web_ref[0] = webview
                 webview.setLayoutParams(LinearLayout.LayoutParams(
@@ -950,10 +923,6 @@ class ChatWebTabsPlugin(BasePlugin):
         except Exception as e:
             self.log(f"Error opening external browser: {e}")
 
-    # =========================================================================
-    # Emoji Picker Dialog Integration
-    # =========================================================================
-
     def open_emoji_picker(self, view, g_idx: int, t_idx: int):
         try:
             LaunchActivity = jclass("org.telegram.ui.LaunchActivity")
@@ -1029,10 +998,6 @@ class ChatWebTabsPlugin(BasePlugin):
             sheet.show()
         except Exception as e:
             self.log(f"Error opening emoji picker: {e}")
-
-    # =========================================================================
-    # Settings Screen
-    # =========================================================================
 
     def create_settings(self) -> List[Any]:
         settings_rows: List[Any] = []

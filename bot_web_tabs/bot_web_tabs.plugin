@@ -271,10 +271,6 @@ class BotWebClient(Base):
             return False
 
 
-# =============================================================================
-# Hooks for ChatActivityEnterView & ChatActivity
-# =============================================================================
-
 class UpdateBotButtonHook(MethodHook):
     def __init__(self, plugin: "BotWebTabsPlugin"):
         super().__init__()
@@ -383,10 +379,6 @@ class ChatActivityResumeHook(MethodHook):
             self.plugin.log(f"ChatActivityResumeHook error: {e}")
 
 
-# =============================================================================
-# Main Plugin Class
-# =============================================================================
-
 class BotWebTabsPlugin(BasePlugin):
     def log(self, text: str):
         try:
@@ -428,7 +420,6 @@ class BotWebTabsPlugin(BasePlugin):
         Class_cls = jclass("java.lang.Class")
         ev_cls = Class_cls.forName("org.telegram.ui.Components.ChatActivityEnterView")
 
-        # 1. Hook updateBotButton(boolean)
         for m in ev_cls.getDeclaredMethods():
             if m.getName() == "updateBotButton" and len(m.getParameterTypes()) == 1:
                 try:
@@ -442,7 +433,6 @@ class BotWebTabsPlugin(BasePlugin):
                     self.log(f"Error hooking updateBotButton: {e}")
                 break
 
-        # 2. Hook setBotInfo(LongSparseArray, boolean)
         for m in ev_cls.getDeclaredMethods():
             if m.getName() == "setBotInfo" and len(m.getParameterTypes()) == 2:
                 try:
@@ -455,7 +445,6 @@ class BotWebTabsPlugin(BasePlugin):
                     self.log(f"Error hooking setBotInfo: {e}")
                 break
 
-        # 3. Hook setDialogId(long, int)
         for m in ev_cls.getDeclaredMethods():
             if m.getName() == "setDialogId" and len(m.getParameterTypes()) == 2:
                 try:
@@ -468,7 +457,6 @@ class BotWebTabsPlugin(BasePlugin):
                     self.log(f"Error hooking setDialogId: {e}")
                 break
 
-        # 4. Hook openWebViewMenu()
         for m in ev_cls.getDeclaredMethods():
             if m.getName() == "openWebViewMenu" and len(m.getParameterTypes()) == 0:
                 try:
@@ -481,7 +469,6 @@ class BotWebTabsPlugin(BasePlugin):
                     self.log(f"Error hooking openWebViewMenu: {e}")
                 break
 
-        # 5. Hook onResume() on ChatActivity
         try:
             ca_cls = Class_cls.forName("org.telegram.ui.ChatActivity")
             for m in ca_cls.getDeclaredMethods():
@@ -625,10 +612,6 @@ class BotWebTabsPlugin(BasePlugin):
         self.set_setting(f"last_url_{bot_id}", cleaned)
         self.save_config(reload_ui=False)
 
-    # =========================================================================
-    # Web View BottomSheet
-    # =========================================================================
-
     def open_bot_web_view(self, context: Context, bot_cfg: Dict[str, Any]):
         activity = get_activity_from_context(context)
         if not activity:
@@ -659,14 +642,12 @@ class BotWebTabsPlugin(BasePlugin):
                 root.setOrientation(LinearLayout.VERTICAL)
                 root.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite))
 
-                # Header Toolbar (height 52dp)
                 header = LinearLayout(activity)
                 header.setOrientation(LinearLayout.HORIZONTAL)
                 header.setGravity(Gravity.CENTER_VERTICAL)
                 header.setPadding(dp(16), dp(8), dp(16), dp(8))
                 header.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite))
 
-                # Title & Subtitle
                 titles_col = LinearLayout(activity)
                 titles_col.setOrientation(LinearLayout.VERTICAL)
 
@@ -690,7 +671,6 @@ class BotWebTabsPlugin(BasePlugin):
 
                 header.addView(titles_col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0))
 
-                # Vector Buttons: Back, Refresh, Open in Browser, Close
                 sheet_ref = [None]
                 icon_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlackText)
                 r_drawable = jclass("org.telegram.messenger.R$drawable")
@@ -727,13 +707,11 @@ class BotWebTabsPlugin(BasePlugin):
 
                 root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)))
 
-                # ProgressBar
                 progress_bar = ProgressBar(activity, None, 16842872)
                 progress_bar.setMax(100)
                 progress_bar.setLayoutParams(LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)))
                 root.addView(progress_bar)
 
-                # WebView
                 webview = WebView(activity)
                 web_ref[0] = webview
                 webview.setLayoutParams(LinearLayout.LayoutParams(
@@ -839,10 +817,6 @@ class BotWebTabsPlugin(BasePlugin):
             context.startActivity(intent)
         except Exception as e:
             self.log(f"Error opening external browser: {e}")
-
-    # =========================================================================
-    # Settings Screen
-    # =========================================================================
 
     def create_settings(self) -> List[Any]:
         settings_rows: List[Any] = []

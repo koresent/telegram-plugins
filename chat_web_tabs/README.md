@@ -8,18 +8,18 @@ Embed web services (Vikunja, Notion, Jira, Linear, Grafana, GitHub, custom dashb
 
 ## Features
 
-- **Seamless Topic Integration**: Custom web tabs are placed directly inside Telegram's existing vertical topics sidebar (and top horizontal pills), positioned neatly at the bottom right before "+ New Topic".
-- **Native Telegram Styling**: Clean topic typography, theme colors, and selector ripples that look and feel 100% native.
-- **Native Emoji Keyboard**: Opens Telegram's full native emoji picker (`EmojiView`) with category tabs, search, recent emojis, and all installed custom animated emoji packs.
-- **Vector SVG Toolbar Controls**: Clean vector icons (`ic_ab_back`, `msg_retry`, `filled_link`, `ic_ab_close`) tinted to the active theme, without clunky header badges.
-- **Persistent Sessions & Logins**: Full support for `CookieManager` and `DOM Storage` (`localStorage`/`sessionStorage`). Log in once to your self-hosted or cloud service (e.g. Vikunja, Kanban) and stay logged in.
-- **Smart & Safe Page Resume**: Remembers the exact SPA board or task visited on dismissal, strictly validates against the base domain to prevent unexpected external redirects, and offers a 1-tap "Reset saved page" button in settings.
-- **Clean Configuration**: Empty defaults out-of-the-box (no pre-filled user IDs), custom group title editing, and dynamic addition/removal of groups and tabs.
-  - High-performance `BottomSheet` dialog opening directly inside the chat.
-  - Toolbar with web app title, active domain, Back, Refresh, Open in Browser, and Close controls.
-  - Animated horizontal progress bar.
-  - Keyboard-friendly with proper soft input resizing for editing tasks and forms.
-- **Dynamic Multi-Group Configuration**: Add unlimited chat groups and unlimited web tabs per group dynamically from the plugin settings page.
+- **Topic Integration**: Custom web tabs are placed directly inside Telegram's existing vertical topics sidebar (and top horizontal pills), positioned at the bottom before "+ New Topic".
+- **Native Telegram Styling**: Topic typography, theme colors, and selector ripples that match the native UI.
+- **Native Emoji Keyboard**: Opens Telegram's full emoji picker (`EmojiView`) with category tabs, search, recent emojis, and installed custom animated emoji packs.
+- **Vector Toolbar Controls**: Vector icons (`ic_ab_back`, `msg_retry`, `filled_link`, `ic_ab_close`) tinted to the active theme.
+- **Persistent Sessions**: Support for `CookieManager` and `DOM Storage` (`localStorage`/`sessionStorage`) to preserve logins across sessions.
+- **Page Resume**: Remembers the last visited URL on dismissal with domain matching to prevent unexpected external redirects, plus a reset button in settings.
+- **In-App Browser BottomSheet**:
+  - Opens directly inside the chat with swipe-dismiss disabled during page scroll.
+  - Toolbar with title, active domain, Back, Refresh, Open in Browser, and Close controls.
+  - Progress bar for loading state.
+  - Soft keyboard resizing for text input and forms.
+- **Configuration**: Empty defaults out-of-the-box, custom group title editing, and dynamic addition or removal of groups and tabs.
 
 ---
 
