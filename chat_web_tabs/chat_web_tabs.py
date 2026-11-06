@@ -56,7 +56,7 @@ __id__ = "chat_web_tabs"
 __name__ = "Chat Web Tabs"
 __description__ = "Custom web apps and pinned web tabs with persistent sessions for Telegram chats"
 __author__ = "@koresent"
-__version__ = "1.0.7"
+__version__ = "1.0.8"
 __icon__ = "exteraPlugins/1"
 __category__ = "general"
 
