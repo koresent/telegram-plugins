@@ -57,10 +57,10 @@ __sdk_version__ = ">=1.4.4.3"
 DEFAULT_CONFIG: List[Dict[str, Any]] = [
     {
         "id": "bot_1",
-        "bot_title": "NewReleases",
-        "bot_id": "772433176",
+        "bot_title": "",
+        "bot_id": "",
         "button_text": "Open App",
-        "url": "https://newreleases.io",
+        "url": "",
         "remember_last_page": False,
         "last_url": "",
     }
