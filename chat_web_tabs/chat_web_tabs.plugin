@@ -56,7 +56,7 @@ __id__ = "chat_web_tabs"
 __name__ = "Chat Web Tabs"
 __description__ = "Custom web apps and pinned web tabs with persistent sessions for Telegram chats"
 __author__ = "@koresent"
-__version__ = "1.0.8"
+__version__ = "1.0.9"
 __icon__ = "exteraPlugins/1"
 __category__ = "general"
 
@@ -554,39 +554,40 @@ class ChatWebTabsPlugin(BasePlugin):
         row = LinearLayout(context)
         row.setOrientation(LinearLayout.HORIZONTAL)
         row.setGravity(Gravity.CENTER_VERTICAL)
-        row.setPadding(dp(21), dp(12), dp(21), dp(12))
+        row.setPadding(dp(21), dp(8), dp(21), dp(8))
+        row.setMinimumHeight(dp(50))
 
-        # Left SVG icon (matching other setting rows)
+        # Left SVG icon matching standard settings cells (TextCell: width=28dp, left=21dp)
         left_icon = ImageView(context)
-        smile_res = getattr(r_drawable, "msg_smile", None)
+        smile_res = getattr(r_drawable, "input_smile", None)
         if smile_res is None:
-            smile_res = getattr(r_drawable, "smiles_tab", None)
+            smile_res = getattr(r_drawable, "msg_emoji_smiles", None)
         if smile_res is None:
-            smile_res = getattr(r_drawable, "msg_emoji", 0)
+            smile_res = getattr(r_drawable, "smiles_tab_smiles", 0)
         left_icon.setImageResource(smile_res)
         left_icon.setColorFilter(Theme.getColor(Theme.key_windowBackgroundWhiteGrayIcon))
         left_icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE)
-        left_icon_lp = LinearLayout.LayoutParams(dp(24), dp(24))
+        left_icon_lp = LinearLayout.LayoutParams(dp(28), dp(28))
         left_icon_lp.gravity = Gravity.CENTER_VERTICAL
         row.addView(left_icon, left_icon_lp)
 
-        # Center title (no description)
+        # Center title (leftMargin=22dp so text starts at standard 71dp matching other rows)
         title_tv = TextView(context)
         title_tv.setText(tr("Иконка вкладки", "Tab icon"))
         title_tv.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16)
         title_tv.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText))
         text_lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0)
-        text_lp.leftMargin = dp(16)
+        text_lp.leftMargin = dp(22)
         text_lp.gravity = Gravity.CENTER_VERTICAL
         row.addView(title_tv, text_lp)
 
         # Right preview of chosen emoji
         preview_box = FrameLayout(context)
-        preview_lp = LinearLayout.LayoutParams(dp(30), dp(30))
+        preview_lp = LinearLayout.LayoutParams(dp(28), dp(28))
         preview_lp.gravity = Gravity.CENTER_VERTICAL
         preview_box.setLayoutParams(preview_lp)
 
-        preview_view = self.create_tab_icon_view(context, tab, 26)
+        preview_view = self.create_tab_icon_view(context, tab, 28)
         preview_box.addView(preview_view, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1088,7 +1089,7 @@ class ChatWebTabsPlugin(BasePlugin):
                         key=f"t_{g_idx}_{t_idx}_rem",
                         text=tr("Запоминать последнюю страницу", "Remember last open page"),
                         default=self.is_remember_enabled(tab),
-                        icon="msg_history",
+                        icon="msg_recent",
                         on_change=lambda val, g=g_idx, t=t_idx: self.update_tab(g, t, "remember_last_page", val),
                     )
                 )
