@@ -56,7 +56,7 @@ __id__ = "chat_web_tabs"
 __name__ = "Chat Web Tabs"
 __description__ = "Custom web apps and pinned web tabs with persistent sessions for Telegram chats"
 __author__ = "@koresent"
-__version__ = "1.0.10"
+__version__ = "1.0.11"
 __icon__ = "exteraPlugins/1"
 __category__ = "general"
 
@@ -557,25 +557,25 @@ class ChatWebTabsPlugin(BasePlugin):
         row.setPadding(dp(21), dp(8), dp(21), dp(8))
         row.setMinimumHeight(dp(50))
 
-        # Left SVG icon matching standard settings cells (TextCell: width=28dp, left=21dp)
+        # Left SVG icon matching standard settings cells (TextCell: width=24dp, left=21dp)
         left_icon = ImageView(context)
         smile_res = getattr(r_drawable, "msg_emoji_smiles", None)
         if smile_res is None:
             smile_res = getattr(r_drawable, "input_smile", 0)
         left_icon.setImageResource(smile_res)
         left_icon.setColorFilter(Theme.getColor(Theme.key_windowBackgroundWhiteGrayIcon))
-        left_icon.setScaleType(ImageView.ScaleType.CENTER)
-        left_icon_lp = LinearLayout.LayoutParams(dp(28), dp(28))
+        left_icon.setScaleType(ImageView.ScaleType.FIT_CENTER)
+        left_icon_lp = LinearLayout.LayoutParams(dp(24), dp(24))
         left_icon_lp.gravity = Gravity.CENTER_VERTICAL
         row.addView(left_icon, left_icon_lp)
 
-        # Center title (leftMargin=22dp so text starts at standard 71dp matching other rows)
+        # Center title (leftMargin=26dp so text starts at standard 71dp matching other rows)
         title_tv = TextView(context)
         title_tv.setText(tr("Иконка вкладки", "Tab icon"))
         title_tv.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16)
         title_tv.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText))
         text_lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0)
-        text_lp.leftMargin = dp(22)
+        text_lp.leftMargin = dp(26)
         text_lp.gravity = Gravity.CENTER_VERTICAL
         row.addView(title_tv, text_lp)
 
