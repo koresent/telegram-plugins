@@ -108,13 +108,39 @@ def extract_domain(url_str: str) -> str:
         return ""
 
 
-def is_remember_enabled(tab: Dict[str, Any]) -> bool:
-    val = tab.get("remember_last_page", False)
-    if isinstance(val, bool):
-        return val
-    if isinstance(val, str):
-        return val.lower() in ("true", "1", "yes")
-    return bool(val)
+def normalize_domain(domain_str: str) -> str:
+    d = str(domain_str or "").strip().lower()
+    if d.startswith("www."):
+        d = d[4:]
+    return d
+
+
+def domains_match(d1: str, d2: str) -> bool:
+    n1 = normalize_domain(d1)
+    n2 = normalize_domain(d2)
+    if not n1 or not n2:
+        return False
+    if n1 == n2:
+        return True
+    if n1.endswith("." + n2) or n2.endswith("." + n1):
+        return True
+    return False
+
+
+def is_url_allowed_for_tab(url_str: str, base_url: str) -> bool:
+    u = str(url_str or "").strip()
+    b = str(base_url or "").strip()
+    if not u or not b:
+        return False
+    if not (u.startswith("http://") or u.startswith("https://")):
+        return False
+    u_dom = extract_domain(u)
+    b_dom = extract_domain(b)
+    if domains_match(u_dom, b_dom):
+        return True
+    if u.startswith(b.rstrip("/")):
+        return True
+    return False
 
 
 def normalize_chat_id(val: Any) -> str:
@@ -405,6 +431,11 @@ class ChatWebTabsPlugin(BasePlugin):
             self.log(f"Error loading groups config: {e}")
             self._groups = [dict(g) for g in DEFAULT_CONFIG]
 
+        for g_idx, group in enumerate(self._groups):
+            for t_idx, tab in enumerate(group.get("tabs", [])):
+                if not tab.get("id"):
+                    tab["id"] = f"tab_{g_idx}_{t_idx}_{int(time.time())}"
+
         self._show_globe_badge = bool(self.get_setting("show_globe_badge", True))
 
     def save_config(self, reload_ui: bool = False):
@@ -483,18 +514,17 @@ class ChatWebTabsPlugin(BasePlugin):
 
                 biv = BackupImageView(context)
                 biv.setLayoutParams(FrameLayout.LayoutParams(dp(size_dp), dp(size_dp), Gravity.CENTER))
-                drawable = AnimatedEmojiDrawable.make(UserConfig.selectedAccount, 13, jlong(custom_id))
+                drawable = AnimatedEmojiDrawable.make(UserConfig.selectedAccount, 3, jlong(int(custom_id)))
+                biv.clearImage()
                 biv.setAnimatedEmojiDrawable(drawable)
 
-                # Ensure AnimatedEmojiDrawable invalidates biv on each frame
                 try:
                     drawable.addView(biv)
                 except Exception:
                     pass
 
-                # Allow and start continuous playback
                 try:
-                    ir = biv.getImageReceiver()
+                    ir = drawable.getImageReceiver()
                     if ir:
                         ir.setAllowStartAnimation(True)
                         ir.setAllowStartLottieAnimation(True)
@@ -519,42 +549,50 @@ class ChatWebTabsPlugin(BasePlugin):
         return tv
 
     def create_emoji_setting_row(self, context: Context, tab: Dict[str, Any], g_idx: int, t_idx: int) -> View:
+        r_drawable = jclass("org.telegram.messenger.R$drawable")
+
         row = LinearLayout(context)
         row.setOrientation(LinearLayout.HORIZONTAL)
         row.setGravity(Gravity.CENTER_VERTICAL)
-        row.setPadding(dp(18), dp(12), dp(18), dp(12))
+        row.setPadding(dp(21), dp(12), dp(21), dp(12))
 
-        icon_box = FrameLayout(context)
-        icon_box.setLayoutParams(LinearLayout.LayoutParams(dp(36), dp(36)))
+        # Left SVG icon (matching other setting rows)
+        left_icon = ImageView(context)
+        smile_res = getattr(r_drawable, "msg_smile", None)
+        if smile_res is None:
+            smile_res = getattr(r_drawable, "smiles_tab", None)
+        if smile_res is None:
+            smile_res = getattr(r_drawable, "msg_emoji", 0)
+        left_icon.setImageResource(smile_res)
+        left_icon.setColorFilter(Theme.getColor(Theme.key_windowBackgroundWhiteGrayIcon))
+        left_icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE)
+        left_icon_lp = LinearLayout.LayoutParams(dp(24), dp(24))
+        left_icon_lp.gravity = Gravity.CENTER_VERTICAL
+        row.addView(left_icon, left_icon_lp)
 
-        icon_view = self.create_tab_icon_view(context, tab, 28)
-        icon_box.addView(icon_view, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            Gravity.CENTER
-        ))
-        row.addView(icon_box)
-
-        text_col = LinearLayout(context)
-        text_col.setOrientation(LinearLayout.VERTICAL)
-        text_col.setGravity(Gravity.CENTER_VERTICAL)
-        text_lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0)
-        text_lp.leftMargin = dp(16)
-        text_col.setLayoutParams(text_lp)
-
+        # Center title (no description)
         title_tv = TextView(context)
         title_tv.setText(tr("Иконка вкладки", "Tab icon"))
         title_tv.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16)
         title_tv.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText))
-        text_col.addView(title_tv)
+        text_lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0)
+        text_lp.leftMargin = dp(16)
+        text_lp.gravity = Gravity.CENTER_VERTICAL
+        row.addView(title_tv, text_lp)
 
-        sub_tv = TextView(context)
-        sub_tv.setText(tr("Нажмите, чтобы выбрать в пикере Telegram", "Tap to choose in Telegram picker"))
-        sub_tv.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13)
-        sub_tv.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText))
-        text_col.addView(sub_tv)
+        # Right preview of chosen emoji
+        preview_box = FrameLayout(context)
+        preview_lp = LinearLayout.LayoutParams(dp(30), dp(30))
+        preview_lp.gravity = Gravity.CENTER_VERTICAL
+        preview_box.setLayoutParams(preview_lp)
 
-        row.addView(text_col)
+        preview_view = self.create_tab_icon_view(context, tab, 26)
+        preview_box.addView(preview_view, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            Gravity.CENTER
+        ))
+        row.addView(preview_box)
 
         try:
             row.setBackground(Theme.createSelectorDrawable(Theme.getColor(Theme.key_listSelector), 2))
@@ -703,10 +741,8 @@ class ChatWebTabsPlugin(BasePlugin):
                 url_target = base_url
                 if self.is_remember_enabled(live_tab):
                     saved_url = self.get_tab_last_url(live_tab)
-                    if saved_url:
-                        s_dom = extract_domain(saved_url)
-                        if s_dom == base_domain or saved_url.startswith(base_url.rstrip("/")):
-                            url_target = saved_url
+                    if saved_url and is_url_allowed_for_tab(saved_url, base_url):
+                        url_target = saved_url
 
                 self.file_log(f"open_web_tab: base='{base_url}', target='{url_target}', rem={self.is_remember_enabled(live_tab)}, saved='{self.get_tab_last_url(live_tab)}'")
                 self.log(f"Opening tab '{live_tab.get('title')}': target='{url_target}' (remember={self.is_remember_enabled(live_tab)}, last='{self.get_tab_last_url(live_tab)}')")
@@ -835,12 +871,13 @@ class ChatWebTabsPlugin(BasePlugin):
                         if new_url:
                             f_str = str(new_url).strip()
                             p = urllib.parse.urlparse(f_str)
-                            header_sub.setText(p.netloc or p.path)
-                            if self.is_remember_enabled(live_tab):
-                                if f_str.startswith("http://") or f_str.startswith("https://"):
-                                    f_dom = extract_domain(f_str)
-                                    if f_dom == base_domain or f_str.startswith(base_url.rstrip("/")):
-                                        self.set_tab_last_url(live_tab, f_str)
+                            domain_disp = p.netloc or p.path
+                            if domain_disp:
+                                header_sub.setText(domain_disp)
+                            is_allowed = is_url_allowed_for_tab(f_str, base_url)
+                            self.file_log(f"handle_url_change: '{f_str}' (allowed={is_allowed}, rem={self.is_remember_enabled(live_tab)})")
+                            if self.is_remember_enabled(live_tab) and is_allowed:
+                                self.set_tab_last_url(live_tab, f_str)
                     except Exception as e:
                         self.log(f"handle_url_change error: {e}")
 
@@ -864,10 +901,10 @@ class ChatWebTabsPlugin(BasePlugin):
                     try:
                         if self.is_remember_enabled(live_tab) and web_ref[0]:
                             curr_url = str(web_ref[0].getUrl() or "").strip()
-                            if curr_url.startswith("http://") or curr_url.startswith("https://"):
-                                c_dom = extract_domain(curr_url)
-                                if c_dom == base_domain or curr_url.startswith(base_url.rstrip("/")):
-                                    self.set_tab_last_url(live_tab, curr_url)
+                            is_allowed = is_url_allowed_for_tab(curr_url, base_url)
+                            self.file_log(f"on_dismiss: curr_url='{curr_url}' (allowed={is_allowed})")
+                            if is_allowed:
+                                self.set_tab_last_url(live_tab, curr_url)
                         if web_ref[0]:
                             web_ref[0].stopLoading()
                             web_ref[0].destroy()
@@ -983,7 +1020,6 @@ class ChatWebTabsPlugin(BasePlugin):
             Switch(
                 key="show_globe_badge",
                 text=tr("Значок глобуса на иконках", "Globe badge on icons"),
-                subtext=tr("Векторный индикатор, отличающий веб-вкладки от обычных тем", "Vector icon indicator distinguishing web tabs from regular topics"),
                 default=self._show_globe_badge,
                 icon="msg_language",
                 on_change=lambda val: self._on_globe_badge_change(val),
@@ -997,9 +1033,8 @@ class ChatWebTabsPlugin(BasePlugin):
             settings_rows.append(
                 Input(
                     key=f"g_{g_idx}_title",
-                    text=tr("Название группы / чата", "Chat / Group title"),
+                    text=tr("Название чата", "Chat title"),
                     default=str(group.get("title", "")),
-                    subtext=tr("Отображается в заголовке настроек", "Displayed in settings section header"),
                     icon="msg_edit",
                     on_change=lambda val, g=g_idx: self.update_group_title(g, val),
                 )
@@ -1041,9 +1076,8 @@ class ChatWebTabsPlugin(BasePlugin):
                 settings_rows.append(
                     Input(
                         key=f"t_{g_idx}_{t_idx}_url",
-                        text=tr("URL адрес сайта", "Website URL address"),
+                        text=tr("URL", "URL"),
                         default=str(tab.get("url", "")),
-                        subtext=tr("Полная ссылка (https://...)", "Full URL (https://...)"),
                         icon="msg_link",
                         on_change=lambda val, g=g_idx, t=t_idx: self.update_tab(g, t, "url", val),
                     )
@@ -1053,7 +1087,6 @@ class ChatWebTabsPlugin(BasePlugin):
                     Switch(
                         key=f"t_{g_idx}_{t_idx}_rem",
                         text=tr("Запоминать последнюю страницу", "Remember last open page"),
-                        subtext=tr("При повторном открытии загружает страницу, на которой вы остановились", "Resume where you left off instead of reloading base URL"),
                         default=self.is_remember_enabled(tab),
                         icon="msg_history",
                         on_change=lambda val, g=g_idx, t=t_idx: self.update_tab(g, t, "remember_last_page", val),
