@@ -56,7 +56,7 @@ __id__ = "chat_web_tabs"
 __name__ = "Chat Web Tabs"
 __description__ = "Custom web apps and pinned web tabs with persistent sessions for Telegram chats"
 __author__ = "@koresent"
-__version__ = "1.0.9"
+__version__ = "1.0.10"
 __icon__ = "exteraPlugins/1"
 __category__ = "general"
 
@@ -559,14 +559,12 @@ class ChatWebTabsPlugin(BasePlugin):
 
         # Left SVG icon matching standard settings cells (TextCell: width=28dp, left=21dp)
         left_icon = ImageView(context)
-        smile_res = getattr(r_drawable, "input_smile", None)
+        smile_res = getattr(r_drawable, "msg_emoji_smiles", None)
         if smile_res is None:
-            smile_res = getattr(r_drawable, "msg_emoji_smiles", None)
-        if smile_res is None:
-            smile_res = getattr(r_drawable, "smiles_tab_smiles", 0)
+            smile_res = getattr(r_drawable, "input_smile", 0)
         left_icon.setImageResource(smile_res)
         left_icon.setColorFilter(Theme.getColor(Theme.key_windowBackgroundWhiteGrayIcon))
-        left_icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE)
+        left_icon.setScaleType(ImageView.ScaleType.CENTER)
         left_icon_lp = LinearLayout.LayoutParams(dp(28), dp(28))
         left_icon_lp.gravity = Gravity.CENTER_VERTICAL
         row.addView(left_icon, left_icon_lp)
