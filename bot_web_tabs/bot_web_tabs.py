@@ -49,7 +49,7 @@ __id__ = "bot_web_tabs"
 __name__ = "Bot Web Tabs"
 __description__ = "Custom web app buttons with persistent sessions for Telegram bots"
 __author__ = "@koresent"
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __icon__ = "exteraPlugins/1"
 __app_version__ = ">=12.5.1"
 __sdk_version__ = ">=1.4.4.3"
@@ -188,6 +188,17 @@ class OnClickListenerProxy(dynamic_proxy(View.OnClickListener)):
             self.callback(view)
         except Exception:
             pass
+
+
+class WebTouchListener(dynamic_proxy(View.OnTouchListener)):
+    def onTouch(self, v, event):
+        try:
+            p = v.getParent()
+            if p:
+                p.requestDisallowInterceptTouchEvent(True)
+        except Exception:
+            pass
+        return False
 
 
 class OnDismissListenerProxy(dynamic_proxy(jclass("android.content.DialogInterface$OnDismissListener"))):
@@ -782,7 +793,19 @@ class BotWebTabsPlugin(BasePlugin):
 
                 builder.setCustomView(root)
                 sheet = builder.create()
+                try:
+                    sheet.setCanDismissWithSwipe(False)
+                except Exception:
+                    pass
+                try:
+                    sheet.setAllowNestedScroll(False)
+                except Exception:
+                    pass
                 sheet_ref[0] = sheet
+
+                touch_listener = WebTouchListener()
+                root.setOnTouchListener(touch_listener)
+                webview.setOnTouchListener(touch_listener)
 
                 def on_dismiss():
                     try:

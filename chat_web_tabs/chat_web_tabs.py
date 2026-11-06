@@ -56,7 +56,7 @@ __id__ = "chat_web_tabs"
 __name__ = "Chat Web Tabs"
 __description__ = "Custom web apps and pinned web tabs with persistent sessions for Telegram chats"
 __author__ = "@koresent"
-__version__ = "1.0.11"
+__version__ = "1.0.12"
 __icon__ = "exteraPlugins/1"
 __category__ = "general"
 
@@ -189,6 +189,17 @@ class OnClickListenerProxy(dynamic_proxy(View.OnClickListener)):
             self.callback(view)
         except Exception:
             pass
+
+
+class WebTouchListener(dynamic_proxy(View.OnTouchListener)):
+    def onTouch(self, v, event):
+        try:
+            p = v.getParent()
+            if p:
+                p.requestDisallowInterceptTouchEvent(True)
+        except Exception:
+            pass
+        return False
 
 
 class OnDismissListenerProxy(dynamic_proxy(jclass("android.content.DialogInterface$OnDismissListener"))):
@@ -894,7 +905,19 @@ class ChatWebTabsPlugin(BasePlugin):
 
                 builder.setCustomView(root)
                 sheet = builder.create()
+                try:
+                    sheet.setCanDismissWithSwipe(False)
+                except Exception:
+                    pass
+                try:
+                    sheet.setAllowNestedScroll(False)
+                except Exception:
+                    pass
                 sheet_ref[0] = sheet
+
+                touch_listener = WebTouchListener()
+                root.setOnTouchListener(touch_listener)
+                webview.setOnTouchListener(touch_listener)
 
                 def on_dismiss():
                     try:
