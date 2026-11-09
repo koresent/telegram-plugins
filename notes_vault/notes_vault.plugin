@@ -89,6 +89,13 @@ def dp(val: float) -> int:
     return int(AndroidUtilities.dp(val))
 
 
+def to_int32(val: int) -> int:
+    val = int(val) & 0xFFFFFFFF
+    if val >= 0x80000000:
+        val -= 0x100000000
+    return int(val)
+
+
 def russian() -> bool:
     try:
         return str(LocaleController.getInstance().getCurrentLocale().getLanguage()).startswith("ru")
@@ -254,7 +261,7 @@ class MarkdownHighlighter:
         code_bg_color = Theme.getColor(Theme.key_chat_messagePanelBackground)
         is_dark = Theme.isCurrentThemeDark() if hasattr(Theme, "isCurrentThemeDark") else True
         if code_bg_color == 0:
-            code_bg_color = 0x22FFFFFF if is_dark else 0x15000000
+            code_bg_color = to_int32(0x22FFFFFF) if is_dark else 0x15000000
 
         lines = text_str.split("\n")
         idx = 0
@@ -371,6 +378,7 @@ class NotesVaultPlugin(BasePlugin):
         self._install_hooks()
         try:
             frag = get_last_fragment()
+            self.log(f"on_plugin_load: frag={frag}")
             if frag and "ChatActivity" in frag.getClass().getName():
                 run_on_ui_thread(lambda: self.attach_button(frag))
         except Exception as e:
@@ -386,6 +394,11 @@ class NotesVaultPlugin(BasePlugin):
                 pass
         self._unhooks.clear()
         self.detach_button()
+        try:
+            import sys
+            sys.modules.pop("notes_vault", None)
+        except Exception:
+            pass
         self.log("NotesVaultPlugin unloaded")
 
     def _install_hooks(self):
@@ -430,6 +443,14 @@ class NotesVaultPlugin(BasePlugin):
                         p = self._orig_edit_padding
                         msg_edit.setPadding(p[0], p[1], p[2], p[3])
                     self._orig_edit_padding = None
+
+            action_bar = getattr(frag, "actionBar", None)
+            if action_bar:
+                menu = getattr(action_bar, "menu", None)
+                if menu:
+                    item = getattr(menu, "getItem", lambda id: None)(99882)
+                    if item:
+                        item.setVisibility(View.GONE)
         except Exception:
             pass
 
@@ -443,27 +464,67 @@ class NotesVaultPlugin(BasePlugin):
             if not ev:
                 return
 
-            if ev.findViewWithTag("notes_vault_btn") is not None:
-                return
+            pos = int(self.get_setting("btn_position", 1))
 
-            pos = int(self.get_setting("btn_position", 0))
+            old_btn = ev.findViewWithTag("notes_vault_btn")
+            if old_btn and old_btn.getParent() and isinstance(old_btn.getParent(), ViewGroup):
+                old_btn.getParent().removeView(old_btn)
+
+            msg_edit = get_private_field(ev, "messageEditText")
+            if msg_edit:
+                if self._orig_edit_padding is None:
+                    self._orig_edit_padding = (
+                        msg_edit.getPaddingLeft(),
+                        msg_edit.getPaddingTop(),
+                        msg_edit.getPaddingRight(),
+                        msg_edit.getPaddingBottom(),
+                    )
+                p = self._orig_edit_padding
+                msg_edit.setPadding(p[0], p[1], p[2], p[3])
+
+            action_bar = getattr(fragment, "actionBar", None)
+            r_drawable = jclass("org.telegram.messenger.R$drawable")
+
+            if pos == 2:
+                if action_bar:
+                    menu = action_bar.createMenu()
+                    if menu:
+                        item = getattr(menu, "getItem", lambda id: None)(99882)
+                        if item is None:
+                            item = menu.addItem(99882, r_drawable.msg_edit)
+                            if item:
+                                item.setOnClickListener(OnClickListenerProxy(lambda v: self.on_button_clicked(fragment)))
+                        else:
+                            item.setVisibility(View.VISIBLE)
+                return
+            else:
+                if action_bar:
+                    menu = getattr(action_bar, "menu", None)
+                    if menu:
+                        item = getattr(menu, "getItem", lambda id: None)(99882)
+                        if item:
+                            item.setVisibility(View.GONE)
 
             btn = FrameLayout(ev.getContext())
             btn.setTag("notes_vault_btn")
-            btn.setBackground(Theme.createSelectorDrawable(Theme.getColor(Theme.key_listSelector), 1))
+            try:
+                btn.setBackground(Theme.createSelectorDrawable(Theme.getColor(Theme.key_listSelector), 1))
+            except Exception:
+                pass
 
             iv = ImageView(ev.getContext())
-            r_drawable = jclass("org.telegram.messenger.R$drawable")
             iv.setImageResource(r_drawable.msg_edit)
             accent_col = Theme.getColor(Theme.key_windowBackgroundWhiteBlueHeader)
             if accent_col == 0:
                 accent_col = Theme.getColor(Theme.key_featuredStickers_addButton)
+            if accent_col == 0:
+                accent_col = to_int32(0xFF2AABEE)
             iv.setColorFilter(accent_col)
             iv.setScaleType(ImageView.ScaleType.CENTER_INSIDE)
 
-            pad = dp(8)
+            pad = dp(7)
             btn.setPadding(pad, pad, pad, pad)
-            btn.addView(iv, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+            btn.addView(iv, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
             btn.setClickable(True)
             btn.setFocusable(True)
             btn.setOnClickListener(OnClickListenerProxy(lambda v: self.on_button_clicked(fragment)))
@@ -474,62 +535,62 @@ class NotesVaultPlugin(BasePlugin):
                     parent = emoji_btn.getParent()
                     if isinstance(parent, LinearLayout):
                         idx = parent.indexOfChild(emoji_btn)
-                        lp = LinearLayout.LayoutParams(dp(38), dp(38))
+                        lp = LinearLayout.LayoutParams(dp(36), dp(36))
                         lp.gravity = Gravity.BOTTOM
                         lp.leftMargin = dp(2)
                         lp.rightMargin = dp(2)
-                        lp.bottomMargin = dp(4)
+                        lp.bottomMargin = dp(6)
                         parent.addView(btn, idx + 1, lp)
                     else:
-                        lp = FrameLayout.LayoutParams(dp(38), dp(38))
+                        lp = FrameLayout.LayoutParams(dp(36), dp(36))
                         lp.gravity = Gravity.LEFT | Gravity.BOTTOM
-                        lp.leftMargin = dp(44)
-                        lp.bottomMargin = dp(4)
+                        lp.leftMargin = dp(52)
+                        lp.bottomMargin = dp(6)
                         parent.addView(btn, lp)
                 else:
-                    lp = LinearLayout.LayoutParams(dp(38), dp(38))
+                    lp = LinearLayout.LayoutParams(dp(36), dp(36))
                     lp.gravity = Gravity.BOTTOM
                     ev.addView(btn, 0, lp)
+
+                btn.bringToFront()
+                try:
+                    btn.setElevation(dp(6))
+                except Exception:
+                    pass
+
+                if msg_edit and self._orig_edit_padding:
+                    p = self._orig_edit_padding
+                    msg_edit.setPadding(p[0] + dp(46), p[1], p[2], p[3])
             elif pos == 1:
                 attach_layout = get_private_field(ev, "attachLayout")
                 if attach_layout and attach_layout.getParent() and isinstance(attach_layout.getParent(), ViewGroup):
                     parent = attach_layout.getParent()
                     if isinstance(parent, LinearLayout):
                         idx = parent.indexOfChild(attach_layout)
-                        lp = LinearLayout.LayoutParams(dp(38), dp(38))
+                        lp = LinearLayout.LayoutParams(dp(36), dp(36))
                         lp.gravity = Gravity.BOTTOM
-                        lp.bottomMargin = dp(4)
+                        lp.bottomMargin = dp(6)
                         parent.addView(btn, idx, lp)
                     else:
-                        lp = FrameLayout.LayoutParams(dp(38), dp(38))
+                        lp = FrameLayout.LayoutParams(dp(36), dp(36))
                         lp.gravity = Gravity.RIGHT | Gravity.BOTTOM
                         lp.rightMargin = dp(48)
-                        lp.bottomMargin = dp(4)
+                        lp.bottomMargin = dp(6)
                         parent.addView(btn, lp)
                 else:
-                    lp = LinearLayout.LayoutParams(dp(38), dp(38))
+                    lp = LinearLayout.LayoutParams(dp(36), dp(36))
                     lp.gravity = Gravity.BOTTOM
                     ev.addView(btn, lp)
 
-                msg_edit = get_private_field(ev, "messageEditText")
-                if msg_edit:
-                    if self._orig_edit_padding is None:
-                        self._orig_edit_padding = (
-                            msg_edit.getPaddingLeft(),
-                            msg_edit.getPaddingTop(),
-                            msg_edit.getPaddingRight(),
-                            msg_edit.getPaddingBottom(),
-                        )
+                btn.bringToFront()
+                try:
+                    btn.setElevation(dp(6))
+                except Exception:
+                    pass
+
+                if msg_edit and self._orig_edit_padding:
                     p = self._orig_edit_padding
-                    msg_edit.setPadding(p[0], p[1], p[2] + dp(38), p[3])
-            elif pos == 2:
-                action_bar = getattr(fragment, "actionBar", None)
-                if action_bar:
-                    menu = action_bar.createMenu()
-                    if menu and menu.findItem(99882) is None:
-                        item = menu.addItem(99882, r_drawable.msg_edit)
-                        if item:
-                            item.setOnClickListener(OnClickListenerProxy(lambda v: self.on_button_clicked(fragment)))
+                    msg_edit.setPadding(p[0], p[1], p[2] + dp(46), p[3])
         except Exception as e:
             self.log(f"attach_button error: {e}")
 
@@ -542,12 +603,15 @@ class NotesVaultPlugin(BasePlugin):
 
     def on_button_clicked(self, fragment: Any):
         token = str(self.get_setting("github_token", "")).strip()
+        repo = str(self.get_setting("github_repo", DEFAULT_REPO)).strip() or DEFAULT_REPO
+        self.log(f"on_button_clicked: token_len={len(token)}, repo={repo}")
         if not token:
             self._prompt_token_dialog()
             return
         self._load_and_open_editor(fragment)
 
     def _prompt_token_dialog(self):
+        self.log("_prompt_token_dialog opened")
         def build():
             activity = get_activity()
             if not activity:
@@ -598,11 +662,14 @@ class NotesVaultPlugin(BasePlugin):
 
     def _load_and_open_editor(self, fragment: Any):
         client = self._get_client()
+        self.log(f"_load_and_open_editor: repo={client.repo}, vault={client.vault_path}, branch={client.branch}")
         BulletinHelper.show_info(tr("Подключение к GitHub...", "Connecting to GitHub..."))
 
         def worker():
+            self.log("worker: started, calling client.list_notes()")
             try:
                 notes = client.list_notes()
+                self.log(f"worker: list_notes returned {len(notes)} notes")
                 if not notes:
                     notes = [{"name": "home.md", "path": f"{client.vault_path}/home.md", "sha": "", "size": 0}]
 
@@ -612,24 +679,41 @@ class NotesVaultPlugin(BasePlugin):
                 sha = first_note.get("sha", "")
                 if not content and sha:
                     try:
+                        self.log(f"worker: fetching content for {first_note['name']}")
                         content, sha = client.get_note_content(first_note["path"])
+                        self.log(f"worker: content fetched, len={len(content)}")
                     except Exception as e:
-                        debug_log(f"Failed to fetch content for {first_note['name']}: {e}")
+                        self.log(f"Failed to fetch content for {first_note['name']}: {e}")
 
                 first_note["sha"] = sha
-                run_on_ui_thread(lambda: self._show_fullscreen_editor(notes, 0, content, sha, fragment))
+
+                def open_ui():
+                    self.log(f"open_ui: starting _show_fullscreen_editor with note={first_note['name']}")
+                    try:
+                        self._show_fullscreen_editor(notes, 0, content, sha, fragment)
+                        self.log("open_ui: _show_fullscreen_editor completed successfully")
+                    except Exception as e:
+                        import traceback
+                        tb = traceback.format_exc()
+                        self.log(f"_show_fullscreen_editor error: {e}\n{tb}")
+                        BulletinHelper.show_error(f"UI Error: {e}")
+
+                run_on_ui_thread(open_ui)
             except urllib.error.HTTPError as he:
                 msg = f"GitHub API Error {he.code}"
                 if he.code == 401:
                     msg = tr("Неверный токен GitHub (401)", "Invalid GitHub Token (401 Unauthorized)")
                 elif he.code == 404:
                     msg = tr(f"Репозиторий {client.repo}/{client.vault_path} не найден (404)", f"Repo {client.repo}/{client.vault_path} not found (404)")
+                self.log(f"worker HTTPError: {he.code} -> {msg}")
                 run_on_ui_thread(lambda: BulletinHelper.show_error(msg))
             except Exception as e:
-                debug_log(f"worker error: {e}")
+                import traceback
+                self.log(f"worker exception: {e}\n{traceback.format_exc()}")
                 run_on_ui_thread(lambda: BulletinHelper.show_error(f"Error: {e}"))
 
-        run_on_queue(worker)
+        self.log("Queueing worker on background queue...")
+        run_on_queue(lambda: worker())
 
     def _show_fullscreen_editor(
         self,
@@ -645,6 +729,9 @@ class NotesVaultPlugin(BasePlugin):
 
         client = self._get_client()
         r_drawable = jclass("org.telegram.messenger.R$drawable")
+        preview_drawable = getattr(r_drawable, "msg_saved", r_drawable.ic_ab_back)
+        edit_drawable = getattr(r_drawable, "msg_edit", preview_drawable)
+        folder_drawable = getattr(r_drawable, "msg_folders", preview_drawable)
 
         state = {
             "notes": list(notes),
@@ -752,7 +839,7 @@ class NotesVaultPlugin(BasePlugin):
             state["preview_mode"] = not state["preview_mode"]
             update_mode_views()
 
-        btn_preview = make_icon_btn(r_drawable.msg_view, toggle_mode, pad_dp=6)
+        btn_preview = make_icon_btn(preview_drawable, toggle_mode, pad_dp=6)
         btn_preview_ref[0] = btn_preview
         header.addView(btn_preview)
 
@@ -760,13 +847,13 @@ class NotesVaultPlugin(BasePlugin):
         push_btn.setText(tr("Пуш", "Push"))
         push_btn.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14)
         push_btn.setTypeface(Typeface.DEFAULT_BOLD)
-        push_btn.setTextColor(0xFFFFFFFF)
+        push_btn.setTextColor(to_int32(0xFFFFFFFF))
         push_btn.setGravity(Gravity.CENTER)
         push_bg = GradientDrawable()
         push_bg.setCornerRadius(dp(16))
         accent_col = Theme.getColor(Theme.key_featuredStickers_addButton)
         if accent_col == 0:
-            accent_col = 0xFF2AABEE
+            accent_col = to_int32(0xFF2AABEE)
         push_bg.setColor(accent_col)
         push_btn.setBackground(push_bg)
         push_btn.setPadding(dp(14), dp(6), dp(14), dp(6))
@@ -894,13 +981,13 @@ class NotesVaultPlugin(BasePlugin):
 
         def update_mode_views():
             if state["preview_mode"]:
-                btn_preview.setImageResource(r_drawable.msg_edit)
+                btn_preview.setImageResource(edit_drawable)
                 editor_scroll.setVisibility(View.GONE)
                 preview_scroll.setVisibility(View.VISIBLE)
                 AndroidUtilities.hideKeyboard(edit)
                 render_markdown_preview()
             else:
-                btn_preview.setImageResource(r_drawable.msg_view)
+                btn_preview.setImageResource(preview_drawable)
                 preview_scroll.setVisibility(View.GONE)
                 editor_scroll.setVisibility(View.VISIBLE)
 
@@ -914,7 +1001,7 @@ class NotesVaultPlugin(BasePlugin):
             gray_col = Theme.getColor(Theme.key_windowBackgroundWhiteGrayText)
             accent_c = Theme.getColor(Theme.key_featuredStickers_addButton)
             if accent_c == 0:
-                accent_c = 0xFF2AABEE
+                accent_c = to_int32(0xFF2AABEE)
 
             in_code = False
             code_lines = []
@@ -1075,10 +1162,10 @@ class NotesVaultPlugin(BasePlugin):
             tab_container.removeAllViews()
             accent = Theme.getColor(Theme.key_featuredStickers_addButton)
             if accent == 0:
-                accent = 0xFF2AABEE
+                accent = to_int32(0xFF2AABEE)
             inactive_bg = Theme.getColor(Theme.key_chat_messagePanelBackground)
             if inactive_bg == 0:
-                inactive_bg = 0x22FFFFFF if (Theme.isCurrentThemeDark() if hasattr(Theme, "isCurrentThemeDark") else True) else 0x15000000
+                inactive_bg = to_int32(0x22FFFFFF) if (Theme.isCurrentThemeDark() if hasattr(Theme, "isCurrentThemeDark") else True) else 0x15000000
 
             for i, note in enumerate(state["notes"]):
                 chip = TextView(activity)
@@ -1091,7 +1178,7 @@ class NotesVaultPlugin(BasePlugin):
                 bg.setCornerRadius(dp(14))
                 if is_active:
                     bg.setColor(accent)
-                    chip.setTextColor(0xFFFFFFFF)
+                    chip.setTextColor(to_int32(0xFFFFFFFF))
                     chip.setTypeface(Typeface.DEFAULT_BOLD)
                 else:
                     bg.setColor(inactive_bg)
@@ -1243,7 +1330,7 @@ class NotesVaultPlugin(BasePlugin):
                     pass
 
                 icon = ImageView(activity)
-                icon.setImageResource(r_drawable.msg_folders)
+                icon.setImageResource(folder_drawable)
                 icon.setColorFilter(Theme.getColor(Theme.key_windowBackgroundWhiteGrayIcon))
                 row.addView(icon, LinearLayout.LayoutParams(dp(22), dp(22)))
 
@@ -1373,6 +1460,7 @@ class NotesVaultPlugin(BasePlugin):
         state["sheet"] = sheet
         refresh_tabs()
         sheet.show()
+        self.log("sheet.show() was called successfully!")
 
     def create_settings(self) -> List[Any]:
         rows: List[Any] = []
@@ -1433,7 +1521,7 @@ class NotesVaultPlugin(BasePlugin):
                     tr("Справа (рядом со скрепкой)", "Right (Next to attachment)"),
                     tr("В шапке чата (ActionBar)", "Chat Header (Top bar)"),
                 ],
-                default=int(self.get_setting("btn_position", 0)),
+                default=int(self.get_setting("btn_position", 1)),
                 icon="msg_settings",
             )
         )
