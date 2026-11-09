@@ -12,6 +12,7 @@ My personal collection of plugins for [exteraGram](https://github.com/exteraSqua
 | **Chat Web Tabs** | Custom web apps and pinned web tabs with persistent sessions for Telegram chats           | [`chat_web_tabs/`](chat_web_tabs/) |
 | **Bot Web Tabs**  | Custom web app buttons with persistent sessions for Telegram bots                         | [`bot_web_tabs/`](bot_web_tabs/)   |
 | **Local Renamer** | Purely visual local display name overrides for bots, groups, channels, and users          | [`local_rename/`](local_rename/)   |
+| **Notes Vault**   | Markdown notes editor connected to your GitHub repository directly from the chat input bar | [`notes_vault/`](notes_vault/)     |
 
 ---
 
