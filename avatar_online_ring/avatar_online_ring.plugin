@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
 Avatar Online Ring Plugin for exteraGram / AyuGram.
-Replaces the standard online status dot with an elegant circular ring
-around user avatars in the dialogs list and inside group chat messages.
+Replaces the standard online status dot indicator with a circular ring
+around user avatars in the dialogs list, group chat messages, and member lists.
 """
 
 import time
 from typing import Any, Dict, List, Optional
 
 from android.graphics import Color, Paint
-from java import jint, jlong
+from java import jint
 from java.lang import System
 from org.telegram.messenger import (
     AndroidUtilities,
@@ -23,25 +23,26 @@ from org.telegram.ui.ActionBar import Theme
 
 from base_plugin import BasePlugin, MethodHook
 from hook_utils import find_class
-from ui.settings import Divider, Header, Input, Selector, Switch
+from ui.settings import Divider, Header, Input, Selector
 
 __id__ = "avatar_online_ring"
 __name__ = "Avatar Online Ring"
 __description__ = "Replaces the online status dot indicator with a circular ring around user avatars"
 __author__ = "@koresent"
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __icon__ = "exteraPlugins/1"
 __category__ = ["appearance", "chats"]
 __app_version__ = ">=12.5.1"
 __sdk_version__ = ">=1.4.4.3"
 
 # Setting Keys
-KEY_ENABLED = "avatar_ring_enabled"
-KEY_HIDE_DOT = "hide_default_dot"
 KEY_COLOR_MODE = "ring_color_mode"
 KEY_CUSTOM_HEX = "custom_hex_color"
 KEY_THICKNESS = "stroke_thickness"
 KEY_GAP = "avatar_gap"
+
+# Excluded system notification bot ID
+SERVICE_NOTIF_USER_ID = 777000
 
 COLOR_MODES = [
     "Theme Online Color",
@@ -94,8 +95,6 @@ class AvatarOnlineRingPlugin(BasePlugin):
         self._f_cmc_user_id = None
 
         # Cached settings
-        self._cfg_enabled = True
-        self._cfg_hide_dot = True
         self._cfg_color_mode = 0
         self._cfg_custom_hex = "#00C853"
         self._cfg_thickness_dp = 2.0
@@ -121,8 +120,6 @@ class AvatarOnlineRingPlugin(BasePlugin):
 
     def _load_settings(self):
         try:
-            self._cfg_enabled = bool(self.get_setting(KEY_ENABLED, True))
-            self._cfg_hide_dot = bool(self.get_setting(KEY_HIDE_DOT, True))
             self._cfg_color_mode = int(self.get_setting(KEY_COLOR_MODE, 0))
             self._cfg_custom_hex = str(self.get_setting(KEY_CUSTOM_HEX, "#00C853")).strip()
 
@@ -187,14 +184,15 @@ class AvatarOnlineRingPlugin(BasePlugin):
 
     # ---------- Status Detection ----------
 
-    def is_user_online(self, cell) -> bool:
-        """Fallback check for online status directly from the TLRPC$User object."""
+    def is_tl_user_online(self, user, account: int = 0) -> bool:
+        """Determines if a TLRPC$User object represents an online user."""
+        if not user:
+            return False
         try:
-            if self._f_dc_user is None:
-                self._f_dc_user = cell.getClass().getDeclaredField("user")
-                self._f_dc_user.setAccessible(True)
-            user = self._f_dc_user.get(cell)
-            if not user or getattr(user, "self", False) or getattr(user, "bot", False):
+            uid = getattr(user, "id", None)
+            if uid is None or uid == SERVICE_NOTIF_USER_ID:
+                return False
+            if getattr(user, "self", False) or getattr(user, "bot", False):
                 return False
 
             status = getattr(user, "status", None)
@@ -202,26 +200,33 @@ class AvatarOnlineRingPlugin(BasePlugin):
                 return False
 
             expires = int(getattr(status, "expires", 0))
+            if expires <= 0:
+                mc = MessagesController.getInstance(account)
+                if mc and hasattr(mc, "onlinePrivacy"):
+                    if mc.onlinePrivacy.containsKey(uid) or mc.onlinePrivacy.containsKey(int(uid)):
+                        return True
+                return False
+
+            cm = ConnectionsManager.getInstance(account)
+            cur_time = cm.getCurrentTime() if cm else int(time.time())
+            return expires > cur_time
+        except Exception:
+            return False
+
+    def is_dialog_cell_online(self, cell) -> bool:
+        """Online check for DialogCell."""
+        try:
+            if self._f_dc_user is None:
+                self._f_dc_user = cell.getClass().getDeclaredField("user")
+                self._f_dc_user.setAccessible(True)
+            user = self._f_dc_user.get(cell)
 
             if self._f_dc_account is None:
                 self._f_dc_account = cell.getClass().getDeclaredField("currentAccount")
                 self._f_dc_account.setAccessible(True)
             acc = int(self._f_dc_account.getInt(cell))
 
-            if expires <= 0:
-                mc = MessagesController.getInstance(acc)
-                if mc and hasattr(mc, "onlinePrivacy"):
-                    uid = getattr(user, "id", None)
-                    if uid is not None and (
-                        mc.onlinePrivacy.containsKey(uid)
-                        or mc.onlinePrivacy.containsKey(int(uid))
-                    ):
-                        return True
-                return False
-
-            cm = ConnectionsManager.getInstance(acc)
-            cur_time = cm.getCurrentTime() if cm else int(time.time())
-            return expires > cur_time
+            return self.is_tl_user_online(user, acc)
         except Exception:
             return False
 
@@ -229,7 +234,7 @@ class AvatarOnlineRingPlugin(BasePlugin):
 
     def draw_ring_on_image(self, canvas, img):
         """Draws a smooth circular ring around the given ImageReceiver."""
-        if not self._cfg_enabled or img is None or canvas is None:
+        if img is None or canvas is None:
             return
         try:
             w = float(img.getImageWidth())
@@ -242,16 +247,38 @@ class AvatarOnlineRingPlugin(BasePlugin):
             cx = x + w / 2.0
             cy = y + h / 2.0
 
-            # Radius calculation:
-            # w / 2.0 is the exact outer edge of the circular avatar.
-            # gap_px adds optional space between avatar and ring.
-            # stroke_px / 2.0 ensures the stroke does not overlap the avatar when gap >= 0.
             gap_px = float(AndroidUtilities.dp(self._cfg_gap_dp))
             stroke_px = float(AndroidUtilities.dp(self._cfg_thickness_dp))
 
             if gap_px <= 0.0:
-                # Snug fit: ring sits directly against the avatar edge
                 radius = (w / 2.0)
+            else:
+                radius = (w / 2.0) + gap_px + (stroke_px / 2.0)
+
+            paint = self.get_paint()
+            canvas.drawCircle(float(cx), float(cy), float(radius), paint)
+        except Exception:
+            pass
+
+    def draw_ring_on_view(self, canvas, view):
+        """Draws a smooth circular ring inside the given avatar View (BackupImageView)."""
+        if view is None or canvas is None:
+            return
+        try:
+            w = float(view.getWidth())
+            h = float(view.getHeight())
+            if w <= 0 or h <= 0:
+                return
+
+            cx = w / 2.0
+            cy = h / 2.0
+
+            gap_px = float(AndroidUtilities.dp(self._cfg_gap_dp))
+            stroke_px = float(AndroidUtilities.dp(self._cfg_thickness_dp))
+
+            if gap_px <= 0.0:
+                # Snug fit within the view boundaries
+                radius = (w / 2.0) - (stroke_px / 2.0)
             else:
                 radius = (w / 2.0) + gap_px + (stroke_px / 2.0)
 
@@ -265,31 +292,41 @@ class AvatarOnlineRingPlugin(BasePlugin):
     def _install_hooks(self):
         plugin_self = self
 
-        # 1. DialogCell Hooks (Chat List)
+        # 1. DialogCell Hooks (Main Chat List)
         class DialogCellIsOnlineHook(MethodHook):
             def after_hooked_method(self, param):
                 try:
                     cell = param.thisObject
-                    is_online = bool(param.getResult())
                     h = System.identityHashCode(cell)
-                    plugin_self._online_cells[h] = is_online
-                    if plugin_self._cfg_enabled and plugin_self._cfg_hide_dot:
+
+                    # Check dialog ID exclusion for 777000
+                    dialog_id = getattr(cell, "currentDialogId", 0)
+                    if dialog_id == SERVICE_NOTIF_USER_ID:
+                        plugin_self._online_cells[h] = False
                         param.setResult(False)
+                        return
+
+                    is_online = bool(param.getResult())
+                    plugin_self._online_cells[h] = is_online
+                    # Always suppress the default green dot badge
+                    param.setResult(False)
                 except Exception:
                     pass
 
         class DialogCellOverlayHook(MethodHook):
             def after_hooked_method(self, param):
                 try:
-                    if not plugin_self._cfg_enabled:
-                        return
                     cell = param.thisObject
+                    dialog_id = getattr(cell, "currentDialogId", 0)
+                    if dialog_id == SERVICE_NOTIF_USER_ID:
+                        return
+
                     canvas = param.args[0]
                     h = System.identityHashCode(cell)
 
                     is_online = plugin_self._online_cells.get(h)
                     if is_online is None:
-                        is_online = plugin_self.is_user_online(cell)
+                        is_online = plugin_self.is_dialog_cell_online(cell)
 
                     if not is_online:
                         return
@@ -328,8 +365,6 @@ class AvatarOnlineRingPlugin(BasePlugin):
 
             def before_hooked_method(self, param):
                 try:
-                    if not plugin_self._cfg_enabled:
-                        return
                     cell = param.thisObject
                     cls = cell.getClass()
                     if plugin_self._f_cmc_last_online is None:
@@ -338,6 +373,21 @@ class AvatarOnlineRingPlugin(BasePlugin):
                     if plugin_self._f_cmc_progress is None:
                         plugin_self._f_cmc_progress = cls.getDeclaredField("avatarOnlineProgress")
                         plugin_self._f_cmc_progress.setAccessible(True)
+                    if plugin_self._f_cmc_user_id is None:
+                        try:
+                            plugin_self._f_cmc_user_id = cls.getDeclaredField("avatarOnlineUserId")
+                            plugin_self._f_cmc_user_id.setAccessible(True)
+                        except Exception:
+                            pass
+
+                    # Check 777000 exclusion
+                    if plugin_self._f_cmc_user_id is not None:
+                        try:
+                            uid = plugin_self._f_cmc_user_id.getLong(cell)
+                            if uid == SERVICE_NOTIF_USER_ID:
+                                return
+                        except Exception:
+                            pass
 
                     last_on = bool(plugin_self._f_cmc_last_online.getBoolean(cell))
                     prog = float(plugin_self._f_cmc_progress.getFloat(cell))
@@ -346,8 +396,8 @@ class AvatarOnlineRingPlugin(BasePlugin):
                     cell_h = System.identityHashCode(cell)
                     self.saved_online[cell_h] = is_online
 
-                    if is_online and plugin_self._cfg_hide_dot:
-                        # Suppress the default Telegram green dot
+                    if is_online:
+                        # Suppress the default green dot badge
                         plugin_self._f_cmc_last_online.setBoolean(cell, False)
                         plugin_self._f_cmc_progress.setFloat(cell, 0.0)
                 except Exception:
@@ -361,15 +411,13 @@ class AvatarOnlineRingPlugin(BasePlugin):
                     cell_h = System.identityHashCode(cell)
                     is_online = self.saved_online.pop(cell_h, False)
 
-                    # Restore state so Telegram animation tracking is not corrupted
-                    if is_online and plugin_self._cfg_hide_dot:
+                    # Restore state so Telegram animation tracking is preserved
+                    if is_online:
                         try:
                             plugin_self._f_cmc_last_online.setBoolean(cell, True)
                             plugin_self._f_cmc_progress.setFloat(cell, 1.0)
                         except Exception:
                             pass
-
-                    if is_online and plugin_self._cfg_enabled:
                         plugin_self.draw_ring_on_image(canvas, img)
                 except Exception:
                     pass
@@ -382,6 +430,51 @@ class AvatarOnlineRingPlugin(BasePlugin):
                     if m.getName() == "drawAvatarWithOnlineStatus":
                         m.setAccessible(True)
                         h = self.hook_method(m, CMCStatusHook())
+                        if h:
+                            self._unhooks.append(h)
+                        break
+        except Exception:
+            pass
+
+        # 3. BackupImageView Hooks (Group Members List & User Cells)
+        class BIVDrawHook(MethodHook):
+            def after_hooked_method(self, param):
+                try:
+                    view = param.thisObject
+                    parent = view.getParent()
+                    if parent is None:
+                        return
+
+                    user = None
+                    p_name = parent.getClass().getSimpleName()
+
+                    if p_name in ("ManageChatUserCell", "UserCell", "UserCell2", "GroupCreateUserCell"):
+                        if hasattr(parent, "getCurrentObject"):
+                            user = parent.getCurrentObject()
+                    elif p_name == "ChatAvatarContainer":
+                        frag = getattr(parent, "parentFragment", None)
+                        if frag and hasattr(frag, "getCurrentUser"):
+                            user = frag.getCurrentUser()
+
+                    if user is None:
+                        return
+
+                    if not plugin_self.is_tl_user_online(user):
+                        return
+
+                    canvas = param.args[0]
+                    plugin_self.draw_ring_on_view(canvas, view)
+                except Exception:
+                    pass
+
+        try:
+            biv_cls = find_class("org.telegram.ui.Components.BackupImageView")
+            if biv_cls:
+                j_cls = biv_cls.getClass()
+                for m in j_cls.getDeclaredMethods():
+                    if m.getName() == "onDraw" and len(m.getParameterTypes()) == 1:
+                        m.setAccessible(True)
+                        h = self.hook_method(m, BIVDrawHook())
                         if h:
                             self._unhooks.append(h)
                         break
@@ -421,29 +514,7 @@ class AvatarOnlineRingPlugin(BasePlugin):
         rows.append(
             Divider(
                 text="Replaces the standard online status dot indicator with a clean circular "
-                     "ring around user avatars both in the chat list and inside group chats."
-            )
-        )
-
-        rows.append(Header("Appearance"))
-        rows.append(
-            Switch(
-                key=KEY_ENABLED,
-                text="Enable Avatar Ring",
-                subtext="Draw circular border indicator around avatars for online users",
-                default=bool(self.get_setting(KEY_ENABLED, True)),
-                icon="msg_theme",
-                on_change=lambda _: on_change(),
-            )
-        )
-        rows.append(
-            Switch(
-                key=KEY_HIDE_DOT,
-                text="Hide Default Online Dot",
-                subtext="Remove the original green dot next to the avatar",
-                default=bool(self.get_setting(KEY_HIDE_DOT, True)),
-                icon="msg_block",
-                on_change=lambda _: on_change(),
+                     "ring around user avatars in the chat list, group messages, and chat member lists."
             )
         )
 
