@@ -13,6 +13,7 @@ My personal collection of plugins for [exteraGram](https://github.com/exteraSqua
 | **Bot Web Tabs**  | Custom web app buttons with persistent sessions for Telegram bots                         | [`bot_web_tabs/`](bot_web_tabs/)   |
 | **Local Renamer** | Purely visual local display name overrides for bots, groups, channels, and users          | [`local_rename/`](local_rename/)   |
 | **Notes Vault**   | Markdown notes editor connected to your GitHub repository directly from the chat input bar | [`notes_vault/`](notes_vault/)     |
+| **Avatar Online Ring** | Replaces the online status dot indicator with a clean circular ring around user avatars in chats and dialogs | [`avatar_online_ring/`](avatar_online_ring/) |
 
 ---
 
