@@ -14,6 +14,7 @@ My personal collection of plugins for [exteraGram](https://github.com/exteraSqua
 | **Local Renamer** | Purely visual local display name overrides for bots, groups, channels, and users          | [`local_rename/`](local_rename/)   |
 | **Notes Vault**   | Markdown notes editor connected to your GitHub repository directly from the chat input bar | [`notes_vault/`](notes_vault/)     |
 | **Avatar Online Ring** | Replaces the online status dot indicator with a clean circular ring around user avatars in chats and dialogs | [`avatar_online_ring/`](avatar_online_ring/) |
+| **Plugin Updater** | Automatically checks for and installs updates for installed plugins from this repository in the background | [`plugin_updater/`](plugin_updater/) |
 
 ---
 

@@ -1,0 +1,120 @@
+{
+  "schema": 1,
+  "name": "koresent Plugins",
+  "description": "Personal collection of plugins for exteraGram and its forks.",
+  "author": "@koresent",
+  "homepage": "https://github.com/koresent/telegram-plugins",
+  "plugins": [
+    {
+      "id": "avatar_online_ring",
+      "name": "Avatar Online Ring",
+      "description": "Replaces the online status dot indicator with a circular ring around user avatars",
+      "author": "@koresent",
+      "version": "1.0.1",
+      "icon": "exteraPlugins/1",
+      "category": [
+        "appearance",
+        "chats"
+      ],
+      "app_version": ">=12.5.1",
+      "sdk_version": ">=1.4.4.3",
+      "file": "avatar_online_ring/avatar_online_ring.plugin",
+      "sha256": "368e2fe7d38b5a594b6fb5959b3e74f8cb4060d157fc1d83dfb9a64fdf70d831",
+      "size": 20428,
+      "updated_at": "2026-11-10T17:04:31Z"
+    },
+    {
+      "id": "bot_web_tabs",
+      "name": "Bot Web Tabs",
+      "description": "Custom web app buttons with persistent sessions for Telegram bots",
+      "author": "@koresent",
+      "version": "1.0.1",
+      "icon": "exteraPlugins/1",
+      "app_version": ">=12.5.1",
+      "sdk_version": ">=1.4.4.3",
+      "file": "bot_web_tabs/bot_web_tabs.plugin",
+      "sha256": "b8b42f835bb30f80c1c58e1ab54f3652fa71e41ef6e4d3a5262fab62132b88d9",
+      "size": 36233,
+      "updated_at": "2026-11-10T17:04:31Z"
+    },
+    {
+      "id": "chat_web_tabs",
+      "name": "Chat Web Tabs",
+      "description": "Custom web apps and pinned web tabs with persistent sessions for Telegram chats",
+      "author": "@koresent",
+      "version": "1.0.12",
+      "icon": "exteraPlugins/1",
+      "category": "general",
+      "file": "chat_web_tabs/chat_web_tabs.plugin",
+      "sha256": "57300f306fd91947188db227e93140f5b45646048ca3de1e81ef48b15f178405",
+      "size": 47401,
+      "updated_at": "2026-11-10T17:04:31Z"
+    },
+    {
+      "id": "cursor_glide",
+      "name": "Cursor Glide",
+      "description": "Smooth cursor caret animation with dynamic trail stretching",
+      "author": "@koresent",
+      "version": "1.0.1",
+      "icon": "exteraPlugins/1",
+      "category": "appearance",
+      "file": "cursor_glide/cursor_glide.plugin",
+      "sha256": "e479138b142a1045b3555e7a1e164f9b96146e9fe4e23e69cc59036a212fb67b",
+      "size": 34031,
+      "updated_at": "2026-11-10T17:04:31Z"
+    },
+    {
+      "id": "local_rename",
+      "name": "Local Renamer",
+      "description": "Purely visual local display name overrides for bots, groups, channels, and users",
+      "author": "@koresent",
+      "version": "1.0.4",
+      "icon": "exteraPlugins/1",
+      "category": [
+        "appearance",
+        "chats"
+      ],
+      "app_version": ">=12.5.1",
+      "sdk_version": ">=1.4.4.3",
+      "file": "local_rename/local_rename.plugin",
+      "sha256": "5039f478604d99b8c355b0b026dd019c6f95f13c5828e6178d4ac227bdbb9f99",
+      "size": 38374,
+      "updated_at": "2026-11-10T17:04:31Z"
+    },
+    {
+      "id": "notes_vault",
+      "name": "Notes Vault",
+      "description": "Markdown notes editor connected directly to your GitHub repository from the chat input bar",
+      "author": "@koresent",
+      "version": "1.1.0",
+      "icon": "exteraPlugins/1",
+      "category": [
+        "chats",
+        "productivity"
+      ],
+      "app_version": ">=12.5.1",
+      "sdk_version": ">=1.4.4.3",
+      "file": "notes_vault/notes_vault.plugin",
+      "sha256": "14c389e3092b14ab6dde39483daa01f3cc508fa78bde052caeac2db39a1268b4",
+      "size": 67900,
+      "updated_at": "2026-11-10T17:04:31Z"
+    },
+    {
+      "id": "plugin_updater",
+      "name": "Plugin Updater",
+      "description": "Automatically updates installed repository plugins in the background without user confirmation.",
+      "author": "@koresent",
+      "version": "1.0.0",
+      "icon": "exteraPlugins/1",
+      "category": [
+        "tools"
+      ],
+      "app_version": ">=12.5.1",
+      "sdk_version": ">=1.4.4.3",
+      "file": "plugin_updater/plugin_updater.plugin",
+      "sha256": "f7326bd10c33e56f2341b38ba18ce20d7bb8ca47c467f05b86a15eb3a354ffab",
+      "size": 22241,
+      "updated_at": "2026-11-10T17:15:27Z"
+    }
+  ]
+}
