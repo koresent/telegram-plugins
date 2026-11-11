@@ -17,6 +17,7 @@ from org.telegram.messenger import (
     MessagesController,
     NotificationCenter,
     UserConfig,
+    UserObject,
 )
 from org.telegram.tgnet import ConnectionsManager
 from org.telegram.ui.ActionBar import Theme
@@ -29,7 +30,7 @@ __id__ = "avatar_online_ring"
 __name__ = "Avatar Online Ring"
 __description__ = "Replaces the online status dot indicator with a circular ring around user avatars"
 __author__ = "@koresent"
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 __icon__ = "exteraPlugins/1"
 __category__ = ["appearance", "chats"]
 __app_version__ = ">=12.5.1"
@@ -74,6 +75,19 @@ def to_signed32(val: int) -> int:
 
 def to_jint(val: int):
     return jint(to_signed32(val))
+
+
+def is_service_id(uid: Optional[int]) -> bool:
+    """Checks whether the given user or dialog ID belongs to a Telegram service account."""
+    if uid is None:
+        return False
+    try:
+        val = int(uid)
+        if val == SERVICE_NOTIF_USER_ID:
+            return True
+        return bool(UserObject.isService(val))
+    except Exception:
+        return False
 
 
 class AvatarOnlineRingPlugin(BasePlugin):
@@ -182,7 +196,17 @@ class AvatarOnlineRingPlugin(BasePlugin):
         self._paint.setStrokeWidth(stroke_px)
         return self._paint
 
-    # ---------- Status Detection ----------
+    # ---------- Status & Entity Helpers ----------
+
+    def get_cell_user(self, cell):
+        """Safely extracts the TLRPC$User object from a DialogCell."""
+        try:
+            if self._f_dc_user is None:
+                self._f_dc_user = cell.getClass().getDeclaredField("user")
+                self._f_dc_user.setAccessible(True)
+            return self._f_dc_user.get(cell)
+        except Exception:
+            return None
 
     def is_tl_user_online(self, user, account: int = 0) -> bool:
         """Determines if a TLRPC$User object represents an online user."""
@@ -190,7 +214,7 @@ class AvatarOnlineRingPlugin(BasePlugin):
             return False
         try:
             uid = getattr(user, "id", None)
-            if uid is None or uid == SERVICE_NOTIF_USER_ID:
+            if uid is None or is_service_id(uid):
                 return False
             if getattr(user, "self", False) or getattr(user, "bot", False):
                 return False
@@ -216,10 +240,16 @@ class AvatarOnlineRingPlugin(BasePlugin):
     def is_dialog_cell_online(self, cell) -> bool:
         """Online check for DialogCell."""
         try:
-            if self._f_dc_user is None:
-                self._f_dc_user = cell.getClass().getDeclaredField("user")
-                self._f_dc_user.setAccessible(True)
-            user = self._f_dc_user.get(cell)
+            try:
+                d_id = int(cell.getDialogId())
+                if is_service_id(d_id):
+                    return False
+            except Exception:
+                pass
+
+            user = self.get_cell_user(cell)
+            if not user:
+                return False
 
             if self._f_dc_account is None:
                 self._f_dc_account = cell.getClass().getDeclaredField("currentAccount")
@@ -299,9 +329,21 @@ class AvatarOnlineRingPlugin(BasePlugin):
                     cell = param.thisObject
                     h = System.identityHashCode(cell)
 
-                    # Check dialog ID exclusion for 777000
-                    dialog_id = getattr(cell, "currentDialogId", 0)
-                    if dialog_id == SERVICE_NOTIF_USER_ID:
+                    # Check dialog ID exclusion for 777000 and service accounts
+                    is_service = False
+                    try:
+                        d_id = int(cell.getDialogId())
+                        if is_service_id(d_id):
+                            is_service = True
+                    except Exception:
+                        pass
+
+                    if not is_service:
+                        user = plugin_self.get_cell_user(cell)
+                        if user and is_service_id(getattr(user, "id", None)):
+                            is_service = True
+
+                    if is_service:
                         plugin_self._online_cells[h] = False
                         param.setResult(False)
                         return
@@ -317,8 +359,17 @@ class AvatarOnlineRingPlugin(BasePlugin):
             def after_hooked_method(self, param):
                 try:
                     cell = param.thisObject
-                    dialog_id = getattr(cell, "currentDialogId", 0)
-                    if dialog_id == SERVICE_NOTIF_USER_ID:
+
+                    # Check dialog ID exclusion for 777000 and service accounts
+                    try:
+                        d_id = int(cell.getDialogId())
+                        if is_service_id(d_id):
+                            return
+                    except Exception:
+                        pass
+
+                    user = plugin_self.get_cell_user(cell)
+                    if user and is_service_id(getattr(user, "id", None)):
                         return
 
                     canvas = param.args[0]
@@ -380,11 +431,11 @@ class AvatarOnlineRingPlugin(BasePlugin):
                         except Exception:
                             pass
 
-                    # Check 777000 exclusion
+                    # Check 777000 and service exclusion
                     if plugin_self._f_cmc_user_id is not None:
                         try:
                             uid = plugin_self._f_cmc_user_id.getLong(cell)
-                            if uid == SERVICE_NOTIF_USER_ID:
+                            if is_service_id(uid):
                                 return
                         except Exception:
                             pass
