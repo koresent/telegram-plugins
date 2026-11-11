@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Avatar Online Ring Plugin for exteraGram / AyuGram.
-Replaces the standard online status dot indicator with a circular ring
+Replaces the standard online status dot indicator with an animated circular ring
 around user avatars in the dialogs list, group chat messages, and member lists.
 """
 
@@ -28,9 +28,9 @@ from ui.settings import Divider, Header, Input, Selector
 
 __id__ = "avatar_online_ring"
 __name__ = "Avatar Online Ring"
-__description__ = "Replaces the online status dot indicator with a circular ring around user avatars"
+__description__ = "Replaces the online status dot indicator with a smoothly animated circular ring around user avatars"
 __author__ = "@koresent"
-__version__ = "1.0.2"
+__version__ = "1.1.0"
 __icon__ = "exteraPlugins/1"
 __category__ = ["appearance", "chats"]
 __app_version__ = ">=12.5.1"
@@ -41,6 +41,7 @@ KEY_COLOR_MODE = "ring_color_mode"
 KEY_CUSTOM_HEX = "custom_hex_color"
 KEY_THICKNESS = "stroke_thickness"
 KEY_GAP = "avatar_gap"
+KEY_ANIM_MODE = "animation_mode"
 
 # Excluded system notification bot ID
 SERVICE_NOTIF_USER_ID = 777000
@@ -67,6 +68,15 @@ GAP_OPTIONS = [
     ("2.0 dp (Spacious)", 2.0),
 ]
 
+ANIM_MODES = [
+    "Smooth (Fade & Scale)",
+    "Subtle (Fade Only)",
+    "Instant (No Animation)",
+]
+
+# Animation Duration in seconds
+ANIM_DURATION = 0.22
+
 
 def to_signed32(val: int) -> int:
     n = int(val) & 0xFFFFFFFF
@@ -91,12 +101,13 @@ def is_service_id(uid: Optional[int]) -> bool:
 
 
 class AvatarOnlineRingPlugin(BasePlugin):
-    """Plugin implementation for drawing circular online indicator rings."""
+    """Plugin implementation for drawing smoothly animated circular online indicator rings."""
 
     def __init__(self):
         super().__init__()
         self._unhooks: List[Any] = []
         self._online_cells: Dict[int, bool] = {}
+        self._anim_states: Dict[int, List[float]] = {}  # key -> [curr_p, target_p, last_t]
         self._paint: Optional[Paint] = None
 
         # Reflection field caches
@@ -113,6 +124,7 @@ class AvatarOnlineRingPlugin(BasePlugin):
         self._cfg_custom_hex = "#00C853"
         self._cfg_thickness_dp = 2.0
         self._cfg_gap_dp = 0.0
+        self._cfg_anim_mode = 0
 
     def on_plugin_load(self):
         self._load_settings()
@@ -128,6 +140,7 @@ class AvatarOnlineRingPlugin(BasePlugin):
                 pass
         self._unhooks.clear()
         self._online_cells.clear()
+        self._anim_states.clear()
         self.refresh_ui()
 
     # ---------- Configuration ----------
@@ -136,6 +149,7 @@ class AvatarOnlineRingPlugin(BasePlugin):
         try:
             self._cfg_color_mode = int(self.get_setting(KEY_COLOR_MODE, 0))
             self._cfg_custom_hex = str(self.get_setting(KEY_CUSTOM_HEX, "#00C853")).strip()
+            self._cfg_anim_mode = int(self.get_setting(KEY_ANIM_MODE, 0))
 
             thickness_idx = int(self.get_setting(KEY_THICKNESS, 1))
             if 0 <= thickness_idx < len(THICKNESS_OPTIONS):
@@ -187,13 +201,17 @@ class AvatarOnlineRingPlugin(BasePlugin):
                 return 0xFF00C853
         return 0xFF00C853
 
-    def get_paint(self) -> Paint:
+    def get_paint(self, alpha_fraction: float = 1.0, stroke_fraction: float = 1.0) -> Paint:
         if self._paint is None:
             self._init_paint()
         color = self._get_ring_color()
-        stroke_px = float(AndroidUtilities.dp(self._cfg_thickness_dp))
+        stroke_px = float(AndroidUtilities.dp(self._cfg_thickness_dp)) * stroke_fraction
+        if stroke_px < 0.5:
+            stroke_px = 0.5
         self._paint.setColor(to_jint(color))
         self._paint.setStrokeWidth(stroke_px)
+        clamped_alpha = max(0, min(255, int(255 * alpha_fraction)))
+        self._paint.setAlpha(clamped_alpha)
         return self._paint
 
     # ---------- Status & Entity Helpers ----------
@@ -260,11 +278,65 @@ class AvatarOnlineRingPlugin(BasePlugin):
         except Exception:
             return False
 
+    # ---------- Animation Engine ----------
+
+    def update_animation_progress(self, host_view, key: int, is_online: bool) -> float:
+        """Calculates and smoothly transitions the animation progress (0.0 to 1.0)."""
+        target = 1.0 if is_online else 0.0
+
+        if self._cfg_anim_mode == 2:
+            # Instant / No Animation
+            return target
+
+        now = time.monotonic()
+        state = self._anim_states.get(key)
+
+        if state is None:
+            # First bind: snap to target so existing online users do not flicker on scroll
+            state = [target, target, now]
+            self._anim_states[key] = state
+
+            # Periodic cache prune when size exceeds threshold
+            if len(self._anim_states) > 400:
+                self._prune_anim_states()
+            return target
+
+        state[1] = target
+        curr_p = state[0]
+        dt = now - state[2]
+        state[2] = now
+
+        if curr_p < target:
+            curr_p = min(target, curr_p + (dt / ANIM_DURATION))
+            state[0] = curr_p
+            try:
+                host_view.postInvalidateOnAnimation()
+            except Exception:
+                pass
+        elif curr_p > target:
+            curr_p = max(target, curr_p - (dt / ANIM_DURATION))
+            state[0] = curr_p
+            try:
+                host_view.postInvalidateOnAnimation()
+            except Exception:
+                pass
+
+        return curr_p
+
+    def _prune_anim_states(self):
+        """Cleans up inactive animation states to prevent unbounded memory growth."""
+        try:
+            keys_to_remove = [k for k, v in self._anim_states.items() if v[0] <= 0.0 and v[1] <= 0.0]
+            for k in keys_to_remove:
+                del self._anim_states[k]
+        except Exception:
+            pass
+
     # ---------- Geometry & Drawing ----------
 
-    def draw_ring_on_image(self, canvas, img):
-        """Draws a smooth circular ring around the given ImageReceiver."""
-        if img is None or canvas is None:
+    def draw_ring_on_image(self, canvas, img, progress: float):
+        """Draws a smooth circular ring around the given ImageReceiver with animated scale/alpha."""
+        if img is None or canvas is None or progress <= 0.005:
             return
         try:
             w = float(img.getImageWidth())
@@ -281,18 +353,32 @@ class AvatarOnlineRingPlugin(BasePlugin):
             stroke_px = float(AndroidUtilities.dp(self._cfg_thickness_dp))
 
             if gap_px <= 0.0:
-                radius = (w / 2.0)
+                base_radius = (w / 2.0)
             else:
-                radius = (w / 2.0) + gap_px + (stroke_px / 2.0)
+                base_radius = (w / 2.0) + gap_px + (stroke_px / 2.0)
 
-            paint = self.get_paint()
+            anim_mode = self._cfg_anim_mode
+            if anim_mode == 0:
+                # Smooth: Scale (0.88 -> 1.0) and Alpha Fade
+                scale = 0.88 + 0.12 * progress
+                radius = base_radius * scale
+                paint = self.get_paint(alpha_fraction=progress, stroke_fraction=progress)
+            elif anim_mode == 1:
+                # Subtle: Alpha Fade only
+                radius = base_radius
+                paint = self.get_paint(alpha_fraction=progress, stroke_fraction=1.0)
+            else:
+                # Instant
+                radius = base_radius
+                paint = self.get_paint(alpha_fraction=1.0, stroke_fraction=1.0)
+
             canvas.drawCircle(float(cx), float(cy), float(radius), paint)
         except Exception:
             pass
 
-    def draw_ring_on_view(self, canvas, view):
-        """Draws a smooth circular ring inside the given avatar View (BackupImageView)."""
-        if view is None or canvas is None:
+    def draw_ring_on_view(self, canvas, view, progress: float):
+        """Draws a smooth circular ring inside the given avatar View with animated scale/alpha."""
+        if view is None or canvas is None or progress <= 0.005:
             return
         try:
             w = float(view.getWidth())
@@ -307,12 +393,22 @@ class AvatarOnlineRingPlugin(BasePlugin):
             stroke_px = float(AndroidUtilities.dp(self._cfg_thickness_dp))
 
             if gap_px <= 0.0:
-                # Snug fit within the view boundaries
-                radius = (w / 2.0) - (stroke_px / 2.0)
+                base_radius = (w / 2.0) - (stroke_px / 2.0)
             else:
-                radius = (w / 2.0) + gap_px + (stroke_px / 2.0)
+                base_radius = (w / 2.0) + gap_px + (stroke_px / 2.0)
 
-            paint = self.get_paint()
+            anim_mode = self._cfg_anim_mode
+            if anim_mode == 0:
+                scale = 0.88 + 0.12 * progress
+                radius = base_radius * scale
+                paint = self.get_paint(alpha_fraction=progress, stroke_fraction=progress)
+            elif anim_mode == 1:
+                radius = base_radius
+                paint = self.get_paint(alpha_fraction=progress, stroke_fraction=1.0)
+            else:
+                radius = base_radius
+                paint = self.get_paint(alpha_fraction=1.0, stroke_fraction=1.0)
+
             canvas.drawCircle(float(cx), float(cy), float(radius), paint)
         except Exception:
             pass
@@ -329,7 +425,6 @@ class AvatarOnlineRingPlugin(BasePlugin):
                     cell = param.thisObject
                     h = System.identityHashCode(cell)
 
-                    # Check dialog ID exclusion for 777000 and service accounts
                     is_service = False
                     try:
                         d_id = int(cell.getDialogId())
@@ -360,7 +455,6 @@ class AvatarOnlineRingPlugin(BasePlugin):
                 try:
                     cell = param.thisObject
 
-                    # Check dialog ID exclusion for 777000 and service accounts
                     try:
                         d_id = int(cell.getDialogId())
                         if is_service_id(d_id):
@@ -379,14 +473,15 @@ class AvatarOnlineRingPlugin(BasePlugin):
                     if is_online is None:
                         is_online = plugin_self.is_dialog_cell_online(cell)
 
-                    if not is_online:
+                    prog = plugin_self.update_animation_progress(cell, h, is_online)
+                    if prog <= 0.005:
                         return
 
                     if plugin_self._f_dc_avatar is None:
                         plugin_self._f_dc_avatar = cell.getClass().getDeclaredField("avatarImage")
                         plugin_self._f_dc_avatar.setAccessible(True)
                     img = plugin_self._f_dc_avatar.get(cell)
-                    plugin_self.draw_ring_on_image(canvas, img)
+                    plugin_self.draw_ring_on_image(canvas, img, prog)
                 except Exception:
                     pass
 
@@ -431,7 +526,6 @@ class AvatarOnlineRingPlugin(BasePlugin):
                         except Exception:
                             pass
 
-                    # Check 777000 and service exclusion
                     if plugin_self._f_cmc_user_id is not None:
                         try:
                             uid = plugin_self._f_cmc_user_id.getLong(cell)
@@ -442,13 +536,13 @@ class AvatarOnlineRingPlugin(BasePlugin):
 
                     last_on = bool(plugin_self._f_cmc_last_online.getBoolean(cell))
                     prog = float(plugin_self._f_cmc_progress.getFloat(cell))
-                    is_online = last_on or (prog > 0.1)
+                    is_online = last_on or (prog > 0.05)
 
                     cell_h = System.identityHashCode(cell)
                     self.saved_online[cell_h] = is_online
 
                     if is_online:
-                        # Suppress the default green dot badge
+                        # Suppress default dot
                         plugin_self._f_cmc_last_online.setBoolean(cell, False)
                         plugin_self._f_cmc_progress.setFloat(cell, 0.0)
                 except Exception:
@@ -462,14 +556,17 @@ class AvatarOnlineRingPlugin(BasePlugin):
                     cell_h = System.identityHashCode(cell)
                     is_online = self.saved_online.pop(cell_h, False)
 
-                    # Restore state so Telegram animation tracking is preserved
                     if is_online:
                         try:
                             plugin_self._f_cmc_last_online.setBoolean(cell, True)
                             plugin_self._f_cmc_progress.setFloat(cell, 1.0)
                         except Exception:
                             pass
-                        plugin_self.draw_ring_on_image(canvas, img)
+
+                    # Use animation engine for smooth transition
+                    prog = plugin_self.update_animation_progress(cell, cell_h, is_online)
+                    if prog > 0.005:
+                        plugin_self.draw_ring_on_image(canvas, img, prog)
                 except Exception:
                     pass
 
@@ -507,14 +604,15 @@ class AvatarOnlineRingPlugin(BasePlugin):
                         if frag and hasattr(frag, "getCurrentUser"):
                             user = frag.getCurrentUser()
 
-                    if user is None:
-                        return
+                    is_online = plugin_self.is_tl_user_online(user) if user else False
+                    v_h = System.identityHashCode(view)
 
-                    if not plugin_self.is_tl_user_online(user):
+                    prog = plugin_self.update_animation_progress(view, v_h, is_online)
+                    if prog <= 0.005:
                         return
 
                     canvas = param.args[0]
-                    plugin_self.draw_ring_on_view(canvas, view)
+                    plugin_self.draw_ring_on_view(canvas, view, prog)
                 except Exception:
                     pass
 
@@ -564,8 +662,8 @@ class AvatarOnlineRingPlugin(BasePlugin):
         rows.append(Header("Avatar Online Ring"))
         rows.append(
             Divider(
-                text="Replaces the standard online status dot indicator with a clean circular "
-                     "ring around user avatars in the chat list, group messages, and chat member lists."
+                text="Replaces the standard online status dot indicator with a clean, smoothly animated "
+                     "circular ring around user avatars in the chat list, group messages, and chat member lists."
             )
         )
 
@@ -607,6 +705,18 @@ class AvatarOnlineRingPlugin(BasePlugin):
                 items=[label for label, _ in GAP_OPTIONS],
                 default=int(self.get_setting(KEY_GAP, 0)),
                 icon="msg_folders",
+                on_change=lambda _: on_change(),
+            )
+        )
+
+        rows.append(Header("Animation"))
+        rows.append(
+            Selector(
+                key=KEY_ANIM_MODE,
+                text="Online Animation",
+                items=ANIM_MODES,
+                default=int(self.get_setting(KEY_ANIM_MODE, 0)),
+                icon="msg_round",
                 on_change=lambda _: on_change(),
             )
         )
